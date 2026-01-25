@@ -1,0 +1,19 @@
+[package]
+name = "typedlua-parser"
+version = "0.1.0"
+edition = "2021"
+description = "Lexer, parser, and AST for TypedLua - a typed superset of Lua"
+documentation = "https://github.com/typedlua/typedlua"
+repository = "https://github.com/typedlua/typedlua"
+license = "MIT"
+keywords = ["lua", "typedlua", "parser", "compiler", "lexer"]
+categories = ["development-tools", "parsing"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+rustc-hash = "2.1"
+thiserror = "2.0"
+
+[features]
+default = ["typed"]
+typed = []  # Enable TypedLua extensions (classes, interfaces, etc.)
