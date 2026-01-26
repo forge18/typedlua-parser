@@ -49,7 +49,9 @@ pub use ast::{Ident, Program, Spanned};
 pub use diagnostics::{CollectingDiagnosticHandler, Diagnostic, DiagnosticHandler};
 pub use errors::LexerError;
 pub use lexer::{Lexer, TemplatePart, Token, TokenKind};
-pub use parser::{ExpressionParser, Parser, ParserError, PatternParser, StatementParser, TypeParser};
+pub use parser::{
+    ExpressionParser, Parser, ParserError, PatternParser, StatementParser, TypeParser,
+};
 pub use span::Span;
 pub use string_interner::{CommonIdentifiers, StringId, StringInterner};
 
