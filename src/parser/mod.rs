@@ -101,6 +101,7 @@ impl<'a> Parser<'a> {
     }
 
     // Token stream management
+    #[inline(always)]
     fn current(&self) -> &Token {
         self.tokens.get(self.position).unwrap_or_else(|| {
             self.tokens
@@ -109,10 +110,12 @@ impl<'a> Parser<'a> {
         })
     }
 
+    #[inline(always)]
     fn is_at_end(&self) -> bool {
         matches!(self.current().kind, TokenKind::Eof)
     }
 
+    #[inline(always)]
     fn advance(&mut self) -> &Token {
         if !self.is_at_end() {
             self.position += 1;
@@ -120,6 +123,7 @@ impl<'a> Parser<'a> {
         &self.tokens[self.position - 1]
     }
 
+    #[inline(always)]
     fn check(&self, kind: &TokenKind) -> bool {
         if self.is_at_end() {
             return false;
@@ -127,10 +131,12 @@ impl<'a> Parser<'a> {
         std::mem::discriminant(&self.current().kind) == std::mem::discriminant(kind)
     }
 
+    #[inline(always)]
     fn nth_token_kind(&self, n: usize) -> Option<&TokenKind> {
         self.tokens.get(self.position + n).map(|t| &t.kind)
     }
 
+    #[inline]
     fn match_token(&mut self, kinds: &[TokenKind]) -> bool {
         for kind in kinds {
             if self.check(kind) {
@@ -152,6 +158,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    #[inline(always)]
     fn current_span(&self) -> Span {
         self.current().span
     }

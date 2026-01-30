@@ -192,12 +192,14 @@ impl StringInterner {
 
 impl StringId {
     /// Get the raw u32 value of this ID
+    #[inline(always)]
     pub fn as_u32(self) -> u32 {
         self.0
     }
 
     /// Create a StringId from a raw u32 value
     /// This is unchecked and doesn't validate the ID exists in the interner
+    #[inline(always)]
     pub fn from_u32(id: u32) -> Self {
         Self(id)
     }
