@@ -137,6 +137,25 @@ impl StringInterner {
         f(&strings[id.0 as usize])
     }
 
+    /// Export the string table for serialization.
+    /// Returns the ordered list of interned strings so StringId indices remain valid.
+    pub fn to_strings(&self) -> Vec<String> {
+        self.id_to_string.borrow().clone()
+    }
+
+    /// Reconstruct an interner from a previously exported string table.
+    /// StringId values from the original interner will resolve to the same strings.
+    pub fn from_strings(strings: Vec<String>) -> Self {
+        let mut string_to_id = FxHashMap::default();
+        for (i, s) in strings.iter().enumerate() {
+            string_to_id.insert(s.clone(), StringId(i as u32));
+        }
+        StringInterner {
+            string_to_id: RefCell::new(string_to_id),
+            id_to_string: RefCell::new(strings),
+        }
+    }
+
     /// Get the number of unique strings interned
     pub fn len(&self) -> usize {
         self.id_to_string.borrow().len()
