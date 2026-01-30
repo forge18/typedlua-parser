@@ -593,10 +593,29 @@ impl Parser<'_> {
                 })
             }
             TokenKind::Number(s) => {
-                let num = s.parse::<f64>().map_err(|_| ParserError {
-                    message: "Invalid number literal".to_string(),
-                    span: start_span,
-                })?;
+                let num = if s.starts_with("0x") || s.starts_with("0X") {
+                    // Parse hexadecimal number
+                    i64::from_str_radix(&s[2..], 16)
+                        .map(|i| i as f64)
+                        .map_err(|_| ParserError {
+                            message: "Invalid hexadecimal number literal".to_string(),
+                            span: start_span,
+                        })?
+                } else if s.starts_with("0b") || s.starts_with("0B") {
+                    // Parse binary number
+                    i64::from_str_radix(&s[2..], 2)
+                        .map(|i| i as f64)
+                        .map_err(|_| ParserError {
+                            message: "Invalid binary number literal".to_string(),
+                            span: start_span,
+                        })?
+                } else {
+                    // Parse decimal number
+                    s.parse::<f64>().map_err(|_| ParserError {
+                        message: "Invalid number literal".to_string(),
+                        span: start_span,
+                    })?
+                };
                 self.advance();
                 Ok(Expression {
                     kind: ExpressionKind::Literal(Literal::Number(num)),
