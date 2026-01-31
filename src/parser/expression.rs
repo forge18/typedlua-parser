@@ -464,6 +464,41 @@ impl Parser<'_> {
                         ..Default::default()
                     };
                 }
+                // Try to parse `expr<TypeArgs>(args)` as a generic function call.
+                // Uses backtracking: if `<TypeArgs>` doesn't end with `>` followed
+                // by `(`, treat `<` as the comparison operator instead.
+                TokenKind::LessThan => {
+                    let checkpoint = self.position;
+                    self.advance(); // consume '<'
+                    if let Ok(type_args) = self.parse_type_arguments() {
+                        if self.check(&TokenKind::GreaterThan) {
+                            self.advance(); // consume '>'
+                            if self.check(&TokenKind::LeftParen) {
+                                self.advance(); // consume '('
+                                let arguments = self.parse_argument_list()?;
+                                let end_span = self.current_span();
+                                self.consume(
+                                    TokenKind::RightParen,
+                                    "Expected ')' after arguments",
+                                )?;
+                                let span = expr.span.combine(&end_span);
+                                expr = Expression {
+                                    kind: ExpressionKind::Call(
+                                        Box::new(expr),
+                                        arguments,
+                                        Some(type_args),
+                                    ),
+                                    span,
+                                    ..Default::default()
+                                };
+                                continue;
+                            }
+                        }
+                    }
+                    // Backtrack: not a generic call, treat '<' as comparison
+                    self.position = checkpoint;
+                    break;
+                }
                 TokenKind::ColonColon => {
                     self.advance();
                     let method = self.parse_identifier()?;

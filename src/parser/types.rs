@@ -430,7 +430,7 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_type_arguments(&mut self) -> Result<Vec<Type>, ParserError> {
+    pub(crate) fn parse_type_arguments(&mut self) -> Result<Vec<Type>, ParserError> {
         let mut args = Vec::new();
 
         loop {

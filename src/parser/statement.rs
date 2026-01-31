@@ -624,6 +624,17 @@ impl Parser<'_> {
 
         let name = self.parse_identifier()?;
 
+        // Parse optional implements clause
+        let mut implements = Vec::new();
+        if self.match_token(&[TokenKind::Implements]) {
+            loop {
+                implements.push(self.parse_type()?);
+                if !self.match_token(&[TokenKind::Comma]) {
+                    break;
+                }
+            }
+        }
+
         self.consume(TokenKind::LeftBrace, "Expected '{' after enum name")?;
 
         let mut members = Vec::new();
@@ -650,25 +661,87 @@ impl Parser<'_> {
                     });
                     is_rich_enum = true;
                 } else if self.check(&TokenKind::LeftParen) {
-                    self.consume(TokenKind::LeftParen, "Expected '(' after enum member name")?;
-                    let mut arguments = Vec::new();
-                    while !self.check(&TokenKind::RightParen) && !self.is_at_end() {
-                        let arg = self.parse_expression()?;
-                        arguments.push(arg);
-                        if !self.check(&TokenKind::RightParen) {
-                            self.consume(TokenKind::Comma, "Expected ',' between arguments")?;
+                    // Disambiguate between method definition and member invocation.
+                    // Method: `name(): void { ... }` or `name(param: type): void { ... }`
+                    // Member: `name("value")` or `name(42)`
+                    // Check: after `(`, if `)` is followed by `:` or `{`, or if first
+                    // thing inside parens is `identifier :` (typed param), it's a method.
+                    let is_method = {
+                        // nth_token_kind(0) is `(`, nth_token_kind(1) is what follows
+                        let after_paren = self.nth_token_kind(1);
+                        match after_paren {
+                            // Empty params: `name()` - check what follows `)`
+                            Some(TokenKind::RightParen) => {
+                                // After `)`, check for `:` (return type) or `{` (body)
+                                matches!(
+                                    self.nth_token_kind(2),
+                                    Some(TokenKind::Colon) | Some(TokenKind::LeftBrace)
+                                )
+                            }
+                            // Typed param: `name(param: type, ...)`
+                            Some(TokenKind::Identifier(_)) => {
+                                matches!(self.nth_token_kind(2), Some(TokenKind::Colon))
+                            }
+                            _ => false,
                         }
-                    }
-                    self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
-                    let member_end = self.current_span();
+                    };
 
-                    members.push(EnumMember {
-                        name: member_name,
-                        arguments,
-                        value: None,
-                        span: member_start.combine(&member_end),
-                    });
-                    is_rich_enum = true;
+                    if is_method {
+                        // Parse as method definition
+                        self.consume(TokenKind::LeftParen, "Expected '('")?;
+                        let params = self.parse_typed_parameter_list()?;
+                        self.consume(
+                            TokenKind::RightParen,
+                            "Expected ')' after method parameters",
+                        )?;
+                        let return_type = if self.match_token(&[TokenKind::Colon]) {
+                            Some(self.parse_type()?)
+                        } else {
+                            None
+                        };
+                        self.consume(
+                            TokenKind::LeftBrace,
+                            "Expected '{' after method signature",
+                        )?;
+                        let body = self.parse_block()?;
+                        self.consume(TokenKind::RightBrace, "Expected '}' after method body")?;
+                        let method_end = self.current_span();
+                        methods.push(EnumMethod {
+                            name: member_name,
+                            parameters: params,
+                            return_type,
+                            body,
+                            span: member_start.combine(&method_end),
+                        });
+                        is_rich_enum = true;
+                    } else {
+                        // Parse as member with arguments
+                        self.consume(
+                            TokenKind::LeftParen,
+                            "Expected '(' after enum member name",
+                        )?;
+                        let mut arguments = Vec::new();
+                        while !self.check(&TokenKind::RightParen) && !self.is_at_end() {
+                            let arg = self.parse_expression()?;
+                            arguments.push(arg);
+                            if !self.check(&TokenKind::RightParen) {
+                                self.consume(
+                                    TokenKind::Comma,
+                                    "Expected ',' between arguments",
+                                )?;
+                            }
+                        }
+                        self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
+                        let member_end = self.current_span();
+
+                        members.push(EnumMember {
+                            name: member_name,
+                            arguments,
+                            value: None,
+                            span: member_start.combine(&member_end),
+                        });
+                        is_rich_enum = true;
+                    }
                 } else {
                     let value = if self.match_token(&[TokenKind::Equal]) {
                         match &self.current().kind {
@@ -775,6 +848,7 @@ impl Parser<'_> {
             fields: if is_rich_enum { fields } else { Vec::new() },
             constructor: if is_rich_enum { constructor } else { None },
             methods: if is_rich_enum { methods } else { Vec::new() },
+            implements,
             span: start_span.combine(&end_span),
         }))
     }
@@ -2022,7 +2096,7 @@ impl Parser<'_> {
             let param_start = self.current_span();
             let name = self.parse_identifier()?;
 
-            let constraint = if self.match_token(&[TokenKind::Extends]) {
+            let constraint = if self.match_token(&[TokenKind::Extends, TokenKind::Implements]) {
                 Some(Box::new(self.parse_type()?))
             } else {
                 None
@@ -2118,6 +2192,9 @@ impl Parser<'_> {
         loop {
             let param_start = self.current_span();
 
+            // Parse decorators on constructor parameters (e.g., @readonly)
+            let decorators = self.parse_decorators()?;
+
             let access = if self.match_token(&[TokenKind::Public]) {
                 Some(AccessModifier::Public)
             } else if self.match_token(&[TokenKind::Private]) {
@@ -2128,7 +2205,20 @@ impl Parser<'_> {
                 None
             };
 
-            let is_readonly = self.match_token(&[TokenKind::Readonly]);
+            let mut is_readonly = self.match_token(&[TokenKind::Readonly]);
+
+            // Check if @readonly decorator was used
+            if !is_readonly {
+                for dec in &decorators {
+                    if let crate::ast::statement::DecoratorExpression::Identifier(ident) = &dec.expression {
+                        let name_str = self.interner.resolve(ident.node);
+                        if name_str == "readonly" {
+                            is_readonly = true;
+                            break;
+                        }
+                    }
+                }
+            }
 
             let name = self.parse_identifier()?;
 
@@ -2147,6 +2237,7 @@ impl Parser<'_> {
             let param_end = self.current_span();
 
             params.push(ConstructorParameter {
+                decorators,
                 access,
                 is_readonly,
                 name,
