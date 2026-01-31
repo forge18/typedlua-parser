@@ -452,7 +452,8 @@ impl Parser<'_> {
                 members.push(InterfaceMember::Index(self.parse_index_signature()?));
             } else {
                 let is_readonly = self.match_token(&[TokenKind::Readonly]);
-                let name = self.parse_identifier()?;
+                // Allow keywords as property/method names in interfaces
+                let name = self.parse_interface_member_name()?;
 
                 if self.check(&TokenKind::LeftParen) || self.check(&TokenKind::LessThan) {
                     // Method signature
@@ -1975,6 +1976,43 @@ impl Parser<'_> {
 
         self.advance();
         Ok(Spanned::new(name, span))
+    }
+
+    /// Parse an identifier or keyword for interface member names
+    /// This allows keywords like 'type' to be used as property names
+    fn parse_interface_member_name(&mut self) -> Result<Ident, ParserError> {
+        let span = self.current_span();
+
+        match &self.current().kind {
+            TokenKind::Identifier(name) => {
+                let id = *name;
+                self.advance();
+                Ok(Spanned::new(id, span))
+            }
+            kind if kind.is_keyword() => {
+                // Allow keywords as member names in interfaces
+                if let Some(s) = kind.to_keyword_str() {
+                    let id = self.interner.intern(s);
+                    self.advance();
+                    Ok(Spanned::new(id, span))
+                } else {
+                    Err(ParserError {
+                        message: format!(
+                            "Internal error: keyword {:?} missing string representation",
+                            kind
+                        ),
+                        span,
+                    })
+                }
+            }
+            _ => Err(ParserError {
+                message: format!(
+                    "Expected identifier or keyword, got {:?}",
+                    self.current().kind
+                ),
+                span,
+            }),
+        }
     }
 
     pub(super) fn parse_type_parameters(&mut self) -> Result<Vec<TypeParameter>, ParserError> {

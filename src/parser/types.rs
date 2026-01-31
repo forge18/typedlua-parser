@@ -361,30 +361,6 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_function_type(&mut self) -> Result<Type, ParserError> {
-        let start_span = self.current_span();
-        self.consume(TokenKind::LeftParen, "Expected '('")?;
-
-        let parameters = self.parse_parameter_list()?;
-
-        self.consume(TokenKind::RightParen, "Expected ')'")?;
-        self.consume(TokenKind::Arrow, "Expected '->' in function type")?;
-
-        let return_type = Box::new(self.parse_type()?);
-        let end_span = return_type.span;
-
-        Ok(Type {
-            kind: TypeKind::Function(FunctionType {
-                type_parameters: None,
-                parameters,
-                return_type,
-                throws: None,
-                span: start_span.combine(&end_span),
-            }),
-            span: start_span.combine(&end_span),
-        })
-    }
-
     /// Try to parse a function type, but return an error if it's not a function type
     fn try_parse_function_type(&mut self) -> Result<Type, ParserError> {
         let checkpoint = self.position;

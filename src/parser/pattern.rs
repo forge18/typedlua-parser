@@ -22,6 +22,15 @@ impl PatternParser for Parser<'_> {
                 self.advance();
                 Ok(Pattern::Identifier(Spanned::new(id, start_span)))
             }
+            // Boolean literals must be checked before the general keyword check
+            TokenKind::True => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Boolean(true), start_span))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Boolean(false), start_span))
+            }
             // Allow keywords as identifiers in patterns (for function type parameters)
             kind if kind.is_keyword() => {
                 if let Some(s) = kind.to_keyword_str() {
@@ -50,14 +59,6 @@ impl PatternParser for Parser<'_> {
                 let string = s.clone();
                 self.advance();
                 Ok(Pattern::Literal(Literal::String(string), start_span))
-            }
-            TokenKind::True => {
-                self.advance();
-                Ok(Pattern::Literal(Literal::Boolean(true), start_span))
-            }
-            TokenKind::False => {
-                self.advance();
-                Ok(Pattern::Literal(Literal::Boolean(false), start_span))
             }
             TokenKind::Nil => {
                 self.advance();
