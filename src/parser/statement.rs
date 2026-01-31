@@ -834,8 +834,10 @@ impl Parser<'_> {
                 });
             }
 
+            // Commas are optional separators in rich enums (like class member syntax).
+            // For simple enums they're still expected between members.
             if !self.check(&TokenKind::RightBrace) {
-                self.consume(TokenKind::Comma, "Expected ',' between enum members")?;
+                self.match_token(&[TokenKind::Comma]);
             }
         }
 
