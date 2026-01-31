@@ -887,7 +887,26 @@ impl Parser<'_> {
                 });
             }
             let name = self.parse_identifier()?;
-            ImportClause::Default(name)
+
+            // Check for alias: default as LocalName
+            let local_name = if self.match_token(&[TokenKind::As]) {
+                self.parse_identifier()?
+            } else {
+                name.clone()
+            };
+
+            // Check for mixed import: default, { named }
+            if self.match_token(&[TokenKind::Comma]) {
+                self.consume(TokenKind::LeftBrace, "Expected '{' after ',' in mixed import")?;
+                let specifiers = self.parse_import_specifiers()?;
+                self.consume(TokenKind::RightBrace, "Expected '}'")?;
+                ImportClause::Mixed {
+                    default: local_name,
+                    named: specifiers,
+                }
+            } else {
+                ImportClause::Default(local_name)
+            }
         };
 
         self.consume(TokenKind::From, "Expected 'from' in import")?;
@@ -959,8 +978,18 @@ impl Parser<'_> {
         };
 
         let kind = if is_default {
-            let expr = self.parse_expression()?;
-            ExportKind::Default(Box::new(expr))
+            // Check if this is a class or function declaration
+            // If so, treat it as a declaration export, not an expression export
+            if matches!(
+                &self.current().kind,
+                TokenKind::Class | TokenKind::Abstract | TokenKind::Final | TokenKind::Function
+            ) {
+                let decl = self.parse_statement()?;
+                ExportKind::Declaration(Box::new(decl))
+            } else {
+                let expr = self.parse_expression()?;
+                ExportKind::Default(Box::new(expr))
+            }
         } else if self.check(&TokenKind::LeftBrace) {
             self.consume(TokenKind::LeftBrace, "Expected '{'")?;
             let specifiers = self.parse_export_specifiers()?;

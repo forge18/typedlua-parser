@@ -323,6 +323,10 @@ pub enum ImportClause {
     Named(Vec<ImportSpecifier>),
     Namespace(Ident),
     TypeOnly(Vec<ImportSpecifier>),
+    Mixed {
+        default: Ident,
+        named: Vec<ImportSpecifier>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
