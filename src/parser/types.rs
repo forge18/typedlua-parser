@@ -141,6 +141,7 @@ impl Parser<'_> {
                     s if s == "void" => Some(PrimitiveType::Void),
                     s if s == "table" => Some(PrimitiveType::Table),
                     s if s == "coroutine" => Some(PrimitiveType::Coroutine),
+                    s if s == "thread" => Some(PrimitiveType::Thread),
                     _ => None,
                 };
 
@@ -224,8 +225,32 @@ impl Parser<'_> {
             // Tuple type: [T, U, V]
             TokenKind::LeftBracket => self.parse_tuple_type(),
 
-            // Function type: (x: T) -> U
-            TokenKind::LeftParen => self.parse_function_type(),
+            // Function type: (x: T) -> U or Tuple type: [T, U]
+            // Note: Tuple types use square brackets, but we might encounter
+            // parenthesized types or function types starting with '('
+            TokenKind::LeftParen => {
+                // Try to parse as function type first
+                match self.try_parse_function_type() {
+                    Ok(func_type) => Ok(func_type),
+                    Err(_) => {
+                        // If it fails, it might be a tuple type with parens
+                        // or a parenthesized type. Let's parse it as a tuple.
+                        self.parse_tuple_type_with_parens()
+                    }
+                }
+            }
+
+            // Variadic type: ...T or ...T[] (used for variadic returns)
+            TokenKind::DotDotDot => {
+                self.advance(); // consume '...'
+                                // Parse the inner type, which could be a postfix type (e.g., string[])
+                let inner_type = self.parse_postfix_type()?;
+                let end_span = inner_type.span;
+                Ok(Type {
+                    kind: TypeKind::Variadic(Box::new(inner_type)),
+                    span: start_span.combine(&end_span),
+                })
+            }
 
             // Parenthesized type: (T)
             _ => Err(ParserError {
@@ -356,6 +381,75 @@ impl Parser<'_> {
                 throws: None,
                 span: start_span.combine(&end_span),
             }),
+            span: start_span.combine(&end_span),
+        })
+    }
+
+    /// Try to parse a function type, but return an error if it's not a function type
+    fn try_parse_function_type(&mut self) -> Result<Type, ParserError> {
+        let checkpoint = self.position;
+        let start_span = self.current_span();
+
+        // Try to parse as function type, but rewind on any error
+        let result = (|| -> Result<Type, ParserError> {
+            self.consume(TokenKind::LeftParen, "Expected '('")?;
+            let parameters = self.parse_parameter_list()?;
+            self.consume(TokenKind::RightParen, "Expected ')'")?;
+
+            // Check if this is actually a function type (should have ->)
+            if !self.check(&TokenKind::Arrow) {
+                return Err(ParserError {
+                    message: "Not a function type".to_string(),
+                    span: start_span,
+                });
+            }
+
+            self.consume(TokenKind::Arrow, "Expected '->'")?;
+            let return_type = Box::new(self.parse_type()?);
+            let end_span = return_type.span;
+
+            Ok(Type {
+                kind: TypeKind::Function(FunctionType {
+                    type_parameters: None,
+                    parameters,
+                    return_type,
+                    throws: None,
+                    span: start_span.combine(&end_span),
+                }),
+                span: start_span.combine(&end_span),
+            })
+        })();
+
+        // If parsing failed, rewind to checkpoint
+        match result {
+            Ok(ty) => Ok(ty),
+            Err(e) => {
+                self.position = checkpoint;
+                Err(e)
+            }
+        }
+    }
+
+    /// Parse a tuple type using parentheses: (T, U, V)
+    fn parse_tuple_type_with_parens(&mut self) -> Result<Type, ParserError> {
+        let start_span = self.current_span();
+        self.consume(TokenKind::LeftParen, "Expected '('")?;
+
+        let mut types = Vec::new();
+
+        // Parse first type
+        types.push(self.parse_type()?);
+
+        // Parse additional types separated by commas
+        while self.match_token(&[TokenKind::Comma]) {
+            types.push(self.parse_type()?);
+        }
+
+        self.consume(TokenKind::RightParen, "Expected ')' after tuple type")?;
+        let end_span = self.current_span();
+
+        Ok(Type {
+            kind: TypeKind::Tuple(types),
             span: start_span.combine(&end_span),
         })
     }

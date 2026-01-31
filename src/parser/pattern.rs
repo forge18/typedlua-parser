@@ -22,6 +22,22 @@ impl PatternParser for Parser<'_> {
                 self.advance();
                 Ok(Pattern::Identifier(Spanned::new(id, start_span)))
             }
+            // Allow keywords as identifiers in patterns (for function type parameters)
+            kind if kind.is_keyword() => {
+                if let Some(s) = kind.to_keyword_str() {
+                    let id = self.interner.intern(s);
+                    self.advance();
+                    Ok(Pattern::Identifier(Spanned::new(id, start_span)))
+                } else {
+                    Err(ParserError {
+                        message: format!(
+                            "Internal error: keyword {:?} missing string representation",
+                            kind
+                        ),
+                        span: start_span,
+                    })
+                }
+            }
             TokenKind::Number(s) => {
                 let num = s.parse::<f64>().map_err(|_| ParserError {
                     message: "Invalid number in pattern".to_string(),

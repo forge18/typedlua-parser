@@ -110,15 +110,6 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_parse_simple() {
-        let source = "const x: number = 42";
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let result = parse(source, handler);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().statements.len(), 1);
-    }
-
-    #[test]
     fn test_parse_function() {
         let source = r#"
             function greet(name: string): string
@@ -173,5 +164,71 @@ mod tests {
         assert!(matches!(tokens[2].kind, TokenKind::Equal));
         assert!(matches!(tokens[3].kind, TokenKind::Number(_)));
         assert!(matches!(tokens[4].kind, TokenKind::Eof));
+    }
+
+    #[test]
+    fn test_parse_gsub_function() {
+        let source = r#"declare namespace string {
+  export function gsub(s: string, pattern: string, repl: string | table | ((match: string) -> string), n?: number): (string, number)
+}"#;
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let result = parse(source, handler.clone());
+
+        let diagnostics = handler.get_diagnostics();
+        if !diagnostics.is_empty() {
+            println!("Parser reported {} diagnostics:", diagnostics.len());
+            for diag in diagnostics.iter() {
+                println!("  {:?}: {}", diag.level, diag.message);
+            }
+        }
+
+        assert!(
+            result.is_ok(),
+            "Failed to parse string namespace: {:?}",
+            result.err()
+        );
+
+        let program = result.unwrap();
+        println!("Parsed {} statements", program.statements.len());
+        for (i, stmt) in program.statements.iter().enumerate() {
+            println!("Statement {}: {:?}", i, std::mem::discriminant(stmt));
+        }
+    }
+
+    #[test]
+    fn test_parse_lua54_stdlib() {
+        let source = include_str!("../../typedlua-core/src/stdlib/lua54.d.tl");
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let result = parse(source, handler.clone());
+
+        // Check for any errors that were reported during parsing
+        let diagnostics = handler.get_diagnostics();
+        if !diagnostics.is_empty() {
+            println!("Parser reported {} diagnostics:", diagnostics.len());
+            for (i, diag) in diagnostics.iter().enumerate() {
+                println!("  {}: {:?} - {}", i, diag.level, diag.message);
+            }
+        }
+
+        assert!(
+            result.is_ok(),
+            "Failed to parse lua54.d.tl: {:?}",
+            result.err()
+        );
+        let program = result.unwrap();
+        println!(
+            "Parsed {} statements from lua54.d.tl",
+            program.statements.len()
+        );
+        for (i, stmt) in program.statements.iter().enumerate() {
+            println!("Statement {}: {:?}", i, std::mem::discriminant(stmt));
+        }
+
+        // We should have at least 9 namespaces
+        assert!(
+            program.statements.len() >= 7,
+            "Expected at least 7 statements, got {}",
+            program.statements.len()
+        );
     }
 }

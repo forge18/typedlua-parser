@@ -514,24 +514,51 @@ impl Parser<'_> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
 
-        let key_name = self.parse_identifier()?;
-        self.consume(TokenKind::Colon, "Expected ':' after index key name")?;
+        // Check if we have [string] or [number] directly (without key name)
+        // or [key: string] or [key: number] (with key name)
+        let (key_name, key_type) = if let TokenKind::Identifier(s) = &self.current().kind {
+            let name = self.resolve(*s);
+            let s_copy = *s; // Copy the StringId before we advance
+            if name == "string" || name == "number" {
+                // Direct [string] or [number] syntax
+                let key_type = if name == "string" {
+                    self.advance();
+                    IndexKeyType::String
+                } else {
+                    self.advance();
+                    IndexKeyType::Number
+                };
+                // Create a dummy identifier for key_name
+                let key_name = Spanned::new(s_copy, start_span);
+                (key_name, key_type)
+            } else {
+                // [key: type] syntax
+                let key_name = self.parse_identifier()?;
+                self.consume(TokenKind::Colon, "Expected ':' after index key name")?;
 
-        let key_type = match &self.current().kind {
-            TokenKind::Identifier(s) if self.resolve(*s) == "string" => {
-                self.advance();
-                IndexKeyType::String
+                let key_type = match &self.current().kind {
+                    TokenKind::Identifier(s) if self.resolve(*s) == "string" => {
+                        self.advance();
+                        IndexKeyType::String
+                    }
+                    TokenKind::Identifier(s) if self.resolve(*s) == "number" => {
+                        self.advance();
+                        IndexKeyType::Number
+                    }
+                    _ => {
+                        return Err(ParserError {
+                            message: "Index signature key must be 'string' or 'number'".to_string(),
+                            span: self.current_span(),
+                        })
+                    }
+                };
+                (key_name, key_type)
             }
-            TokenKind::Identifier(s) if self.resolve(*s) == "number" => {
-                self.advance();
-                IndexKeyType::Number
-            }
-            _ => {
-                return Err(ParserError {
-                    message: "Index signature key must be 'string' or 'number'".to_string(),
-                    span: self.current_span(),
-                })
-            }
+        } else {
+            return Err(ParserError {
+                message: "Expected identifier in index signature".to_string(),
+                span: self.current_span(),
+            });
         };
 
         self.consume(TokenKind::RightBracket, "Expected ']'")?;
@@ -1039,7 +1066,10 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParserError {
-                        message: "Expected 'function' or 'const' in namespace".to_string(),
+                        message: format!(
+                            "Expected 'function' or 'const' in namespace, found {:?}",
+                            self.current().kind
+                        ),
                         span: self.current_span(),
                     });
                 }
