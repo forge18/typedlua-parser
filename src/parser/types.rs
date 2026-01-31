@@ -444,3 +444,611 @@ impl Parser<'_> {
         Ok(args)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::CollectingDiagnosticHandler;
+    use crate::lexer::Lexer;
+    use crate::span::Span;
+    use crate::string_interner::StringInterner;
+    use std::sync::Arc;
+
+    fn parse_type(source: &str) -> Result<Type, ParserError> {
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let mut lexer = Lexer::new(source, handler.clone(), &interner);
+        let tokens = lexer.tokenize().map_err(|e| ParserError {
+            message: format!("Lexer error: {:?}", e),
+            span: Span::default(),
+        })?;
+        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        parser.parse_type()
+    }
+
+    #[test]
+    fn test_parse_primitive_nil() {
+        let result = parse_type("nil");
+        assert!(result.is_ok());
+        // nil is parsed as a literal type, not a primitive
+        match result.unwrap().kind {
+            TypeKind::Literal(Literal::Nil) => {}
+            _ => panic!("Expected nil literal type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_boolean() {
+        let result = parse_type("boolean");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Boolean) => {}
+            _ => panic!("Expected boolean primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_number() {
+        let result = parse_type("number");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Number) => {}
+            _ => panic!("Expected number primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_integer() {
+        let result = parse_type("integer");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Integer) => {}
+            _ => panic!("Expected integer primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_string() {
+        let result = parse_type("string");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::String) => {}
+            _ => panic!("Expected string primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_unknown() {
+        let result = parse_type("unknown");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Unknown) => {}
+            _ => panic!("Expected unknown primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_never() {
+        let result = parse_type("never");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Never) => {}
+            _ => panic!("Expected never primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_void() {
+        let result = parse_type("void");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Void) => {}
+            _ => panic!("Expected void primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_table() {
+        let result = parse_type("table");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Table) => {}
+            _ => panic!("Expected table primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_coroutine() {
+        let result = parse_type("coroutine");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Coroutine) => {}
+            _ => panic!("Expected coroutine primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_primitive_thread() {
+        let result = parse_type("thread");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Primitive(PrimitiveType::Thread) => {}
+            _ => panic!("Expected thread primitive"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_reference() {
+        let result = parse_type("MyType");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Reference(_) => {}
+            _ => panic!("Expected type reference"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_reference_with_args() {
+        let result = parse_type("Array<number>");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Reference(ref_type) => {
+                assert!(ref_type.type_arguments.is_some());
+                assert_eq!(ref_type.type_arguments.unwrap().len(), 1);
+            }
+            _ => panic!("Expected type reference with args"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_reference_with_multiple_args() {
+        let result = parse_type("Map<string, number>");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Reference(ref_type) => {
+                assert!(ref_type.type_arguments.is_some());
+                assert_eq!(ref_type.type_arguments.unwrap().len(), 2);
+            }
+            _ => panic!("Expected type reference with multiple args"),
+        }
+    }
+
+    #[test]
+    fn test_parse_union_type() {
+        let result = parse_type("string | number");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Union(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected union type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_union_type_multiple() {
+        let result = parse_type("A | B | C");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Union(types) => {
+                assert_eq!(types.len(), 3);
+            }
+            _ => panic!("Expected union type with multiple"),
+        }
+    }
+
+    #[test]
+    fn test_parse_intersection_type() {
+        let result = parse_type("A & B");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Intersection(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected intersection type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_intersection_type_multiple() {
+        let result = parse_type("A & B & C");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Intersection(types) => {
+                assert_eq!(types.len(), 3);
+            }
+            _ => panic!("Expected intersection type with multiple"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_type() {
+        let result = parse_type("number[]");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Array(_) => {}
+            _ => panic!("Expected array type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_type_nested() {
+        let result = parse_type("number[][]");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Array(inner) => match inner.kind {
+                TypeKind::Array(_) => {}
+                _ => panic!("Expected nested array type"),
+            },
+            _ => panic!("Expected array type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nullable_type() {
+        let result = parse_type("number?");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Nullable(_) => {}
+            _ => panic!("Expected nullable type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_index_access_type() {
+        let result = parse_type("T[K]");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::IndexAccess(_, _) => {}
+            _ => panic!("Expected index access type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_type() {
+        let result = parse_type("() -> void");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Function(_) => {}
+            _ => panic!("Expected function type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_type_with_params() {
+        let result = parse_type("(x: number, y: string) -> boolean");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Function(func_type) => {
+                assert_eq!(func_type.parameters.len(), 2);
+            }
+            _ => panic!("Expected function type with params"),
+        }
+    }
+
+    #[test]
+    fn test_parse_tuple_type() {
+        let result = parse_type("[number, string, boolean]");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 3);
+            }
+            _ => panic!("Expected tuple type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_tuple_type() {
+        let result = parse_type("[]");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Tuple(types) => {
+                assert!(types.is_empty());
+            }
+            _ => panic!("Expected empty tuple type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_tuple_type_with_parens() {
+        let result = parse_type("(number, string)");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected tuple type with parens"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type() {
+        let result = parse_type("{ x: number, y: string }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 2);
+            }
+            _ => panic!("Expected object type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_empty() {
+        let result = parse_type("{}");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert!(obj_type.members.is_empty());
+            }
+            _ => panic!("Expected empty object type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_with_method() {
+        let result = parse_type("{ method(): number }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 1);
+            }
+            _ => panic!("Expected object type with method"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_with_optional() {
+        let result = parse_type("{ x?: number }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 1);
+            }
+            _ => panic!("Expected object type with optional"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_with_readonly() {
+        let result = parse_type("{ readonly x: number }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 1);
+            }
+            _ => panic!("Expected object type with readonly"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_with_index_signature() {
+        let result = parse_type("{ [key: string]: number }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 1);
+            }
+            _ => panic!("Expected object type with index signature"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_number_type() {
+        let result = parse_type("42");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Literal(Literal::Number(n)) => {
+                assert_eq!(n, 42.0);
+            }
+            _ => panic!("Expected literal number type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_string_type() {
+        let result = parse_type("\"hello\"");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Literal(Literal::String(s)) => {
+                assert_eq!(s, "hello");
+            }
+            _ => panic!("Expected literal string type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_true_type() {
+        let result = parse_type("true");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Literal(Literal::Boolean(true)) => {}
+            _ => panic!("Expected literal true type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_false_type() {
+        let result = parse_type("false");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Literal(Literal::Boolean(false)) => {}
+            _ => panic!("Expected literal false type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_nil_type() {
+        let result = parse_type("nil");
+        assert!(result.is_ok());
+        // nil token is parsed as a literal nil type
+        let ty = result.unwrap();
+        match ty.kind {
+            TypeKind::Literal(Literal::Nil) => {}
+            TypeKind::Primitive(PrimitiveType::Nil) => {}
+            _ => panic!("Expected nil type, got {:?}", ty.kind),
+        }
+    }
+
+    #[test]
+    fn test_parse_variadic_type() {
+        let result = parse_type("...string");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Variadic(_) => {}
+            _ => panic!("Expected variadic type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_variadic_array_type() {
+        let result = parse_type("...string[]");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Variadic(inner) => match inner.kind {
+                TypeKind::Array(_) => {}
+                _ => panic!("Expected variadic array type"),
+            },
+            _ => panic!("Expected variadic type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_predicate() {
+        let result = parse_type("x is string");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::TypePredicate(_) => {}
+            _ => panic!("Expected type predicate"),
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_type() {
+        let result = parse_type("Array<string | number> | null");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Union(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected complex union type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_intersection_with_union() {
+        let result = parse_type("A & (B | C)");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Intersection(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected intersection with union"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_type_returning_union() {
+        let result = parse_type("() -> string | number");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Function(func_type) => match func_type.return_type.kind {
+                TypeKind::Union(_) => {}
+                _ => panic!("Expected union return type"),
+            },
+            _ => panic!("Expected function type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_type_with_void_return() {
+        let result = parse_type("() -> void");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Function(func_type) => match func_type.return_type.kind {
+                TypeKind::Primitive(PrimitiveType::Void) => {}
+                _ => panic!("Expected void return type"),
+            },
+            _ => panic!("Expected function type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_function_type() {
+        let result = parse_type("(x: (y: number) -> string) -> void");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Function(func_type) => {
+                assert_eq!(func_type.parameters.len(), 1);
+            }
+            _ => panic!("Expected nested function type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_with_multiple_methods() {
+        let result = parse_type("{ foo(): void, bar(x: number): string }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 2);
+            }
+            _ => panic!("Expected object type with multiple methods"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_type_mixed_members() {
+        let result = parse_type("{ x: number, method(): void, readonly y: string }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Object(obj_type) => {
+                assert_eq!(obj_type.members.len(), 3);
+            }
+            _ => panic!("Expected object type with mixed members"),
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_nested_type() {
+        let result = parse_type("Array<{ x: number, y: string }>");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Reference(ref_type) => {
+                assert!(ref_type.type_arguments.is_some());
+                let args = ref_type.type_arguments.unwrap();
+                assert_eq!(args.len(), 1);
+                match &args[0].kind {
+                    TypeKind::Object(_) => {}
+                    _ => panic!("Expected object type argument"),
+                }
+            }
+            _ => panic!("Expected reference type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_union_of_function_types() {
+        let result = parse_type("(() -> void) | (() -> string)");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Union(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected union of function types"),
+        }
+    }
+
+    #[test]
+    fn test_parse_intersection_of_object_types() {
+        let result = parse_type("{ x: number } & { y: string }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Intersection(types) => {
+                assert_eq!(types.len(), 2);
+            }
+            _ => panic!("Expected intersection of object types"),
+        }
+    }
+}

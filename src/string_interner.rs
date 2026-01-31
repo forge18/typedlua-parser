@@ -245,7 +245,7 @@ mod tests {
     fn test_intern_many_unique() {
         let interner = StringInterner::new();
 
-        let strings = vec!["foo", "bar", "baz", "qux", "test", "hello", "world"];
+        let strings = ["foo", "bar", "baz", "qux", "test", "hello", "world"];
         let ids: Vec<_> = strings.iter().map(|s| interner.intern(s)).collect();
 
         for i in 0..ids.len() {
