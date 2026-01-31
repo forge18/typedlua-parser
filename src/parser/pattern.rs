@@ -65,6 +65,11 @@ impl PatternParser for Parser<'_> {
             }
             TokenKind::LeftBracket => self.parse_array_pattern(),
             TokenKind::LeftBrace => self.parse_object_pattern(),
+            TokenKind::DotDotDot => {
+                // Variadic parameter: ...
+                self.advance();
+                Ok(Pattern::Wildcard(start_span))
+            }
             _ => Err(ParserError {
                 message: format!("Unexpected token in pattern: {:?}", self.current().kind),
                 span: start_span,

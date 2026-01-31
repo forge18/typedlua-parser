@@ -916,8 +916,20 @@ impl Parser<'_> {
         loop {
             let start_span = self.current_span();
             let is_spread = self.match_token(&[TokenKind::DotDotDot]);
-            let value = self.parse_expression()?;
-            let span = start_span.combine(&value.span);
+
+            // If we have a spread operator but no expression (just `...`),
+            // create a placeholder expression
+            let (value, span) = if is_spread
+                && (self.check(&TokenKind::RightParen) || self.check(&TokenKind::Comma))
+            {
+                let placeholder =
+                    Expression::new(ExpressionKind::Literal(Literal::Nil), start_span);
+                (placeholder, start_span)
+            } else {
+                let expr = self.parse_expression()?;
+                let span = start_span.combine(&expr.span);
+                (expr, span)
+            };
 
             arguments.push(Argument {
                 value,

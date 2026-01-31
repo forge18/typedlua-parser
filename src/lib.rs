@@ -167,10 +167,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_gsub_function() {
-        let source = r#"declare namespace string {
-  export function gsub(s: string, pattern: string, repl: string | table | ((match: string) -> string), n?: number): (string, number)
-}"#;
+    fn test_parse_coroutine_wrap() {
+        let source = r#"const wrapped = coroutine.wrap(function(n: number): number
+    return n * 2
+end)
+
+const result = wrapped(21)"#;
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let result = parse(source, handler.clone());
 

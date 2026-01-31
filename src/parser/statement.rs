@@ -2026,7 +2026,14 @@ impl Parser<'_> {
             let param_start = self.current_span();
             let is_rest = self.match_token(&[TokenKind::DotDotDot]);
 
-            let pattern = self.parse_pattern()?;
+            // If we have a rest parameter but no identifier (just `...`),
+            // create a wildcard pattern
+            let pattern =
+                if is_rest && self.check(&TokenKind::RightParen) || self.check(&TokenKind::Comma) {
+                    Pattern::Wildcard(param_start)
+                } else {
+                    self.parse_pattern()?
+                };
 
             let is_optional = self.match_token(&[TokenKind::Question]);
 
