@@ -516,6 +516,7 @@ impl Parser<'_> {
 
         // Check if we have [string] or [number] directly (without key name)
         // or [key: string] or [key: number] (with key name)
+        // or [K]: V where K is a type parameter
         let (key_name, key_type) = if let TokenKind::Identifier(s) = &self.current().kind {
             let name = self.resolve(*s);
             let s_copy = *s; // Copy the StringId before we advance
@@ -532,27 +533,37 @@ impl Parser<'_> {
                 let key_name = Spanned::new(s_copy, start_span);
                 (key_name, key_type)
             } else {
-                // [key: type] syntax
+                // Check if next token is ':' (indicating [key: type] syntax)
+                // or ']' (indicating [Type] syntax with type parameter)
                 let key_name = self.parse_identifier()?;
-                self.consume(TokenKind::Colon, "Expected ':' after index key name")?;
 
-                let key_type = match &self.current().kind {
-                    TokenKind::Identifier(s) if self.resolve(*s) == "string" => {
-                        self.advance();
-                        IndexKeyType::String
-                    }
-                    TokenKind::Identifier(s) if self.resolve(*s) == "number" => {
-                        self.advance();
-                        IndexKeyType::Number
-                    }
-                    _ => {
-                        return Err(ParserError {
-                            message: "Index signature key must be 'string' or 'number'".to_string(),
-                            span: self.current_span(),
-                        })
-                    }
-                };
-                (key_name, key_type)
+                if self.check(&TokenKind::Colon) {
+                    // [key: type] syntax
+                    self.consume(TokenKind::Colon, "Expected ':' after index key name")?;
+
+                    let key_type = match &self.current().kind {
+                        TokenKind::Identifier(s) if self.resolve(*s) == "string" => {
+                            self.advance();
+                            IndexKeyType::String
+                        }
+                        TokenKind::Identifier(s) if self.resolve(*s) == "number" => {
+                            self.advance();
+                            IndexKeyType::Number
+                        }
+                        _ => {
+                            return Err(ParserError {
+                                message: "Index signature key must be 'string' or 'number'"
+                                    .to_string(),
+                                span: self.current_span(),
+                            })
+                        }
+                    };
+                    (key_name, key_type)
+                } else {
+                    // [Type] syntax with type parameter (e.g., [K]: V)
+                    // Treat it as a string index for now
+                    (key_name, IndexKeyType::String)
+                }
             }
         } else {
             return Err(ParserError {
