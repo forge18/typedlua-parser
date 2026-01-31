@@ -10,6 +10,32 @@ pub trait PatternParser {
 
 impl PatternParser for Parser<'_> {
     fn parse_pattern(&mut self) -> Result<Pattern, ParserError> {
+        self.parse_or_pattern()
+    }
+}
+
+impl Parser<'_> {
+    fn parse_or_pattern(&mut self) -> Result<Pattern, ParserError> {
+        let mut alternatives = vec![self.parse_primary_pattern()?];
+
+        // Keep consuming | tokens while in pattern context
+        while self.check(&TokenKind::Pipe) {
+            self.advance();
+            alternatives.push(self.parse_primary_pattern()?);
+        }
+
+        if alternatives.len() == 1 {
+            // Single alternative - not an or-pattern
+            Ok(alternatives.into_iter().next().unwrap())
+        } else {
+            // Multiple alternatives - create or-pattern
+            let span = alternatives.first().unwrap().span()
+                .combine(&alternatives.last().unwrap().span());
+            Ok(Pattern::Or(OrPattern { alternatives, span }))
+        }
+    }
+
+    fn parse_primary_pattern(&mut self) -> Result<Pattern, ParserError> {
         let start_span = self.current_span();
 
         match &self.current().kind.clone() {
