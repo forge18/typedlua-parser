@@ -1407,8 +1407,8 @@ impl Parser<'_> {
                 initializer,
                 span: start_span.combine(&end_span),
             }))
-        } else if self.check(&TokenKind::LeftParen) {
-            // Method
+        } else if self.check(&TokenKind::LessThan) || self.check(&TokenKind::LeftParen) {
+            // Method (may have type parameters before the parameter list)
             let type_parameters = if self.match_token(&[TokenKind::LessThan]) {
                 Some(self.parse_type_parameters()?)
             } else {
