@@ -19,6 +19,8 @@ pub enum Statement {
     Return(ReturnStatement),
     Break(Span),
     Continue(Span),
+    Label(LabelStatement),
+    Goto(GotoStatement),
     Expression(Expression),
     Block(Block),
     // Exception handling statements
@@ -489,6 +491,18 @@ pub struct DeclareConstStatement {
     pub name: Ident,
     pub type_annotation: Type,
     pub is_export: bool, // For `export const` inside namespaces
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelStatement {
+    pub name: Ident,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GotoStatement {
+    pub target: Ident,
     pub span: Span,
 }
 
