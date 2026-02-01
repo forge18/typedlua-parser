@@ -62,10 +62,10 @@ impl Parser<'_> {
     }
 
     fn parse_intersection_type(&mut self) -> Result<Type, ParserError> {
-        let mut types = vec![self.parse_postfix_type()?];
+        let mut types = vec![self.parse_conditional_type()?];
 
         while self.match_token(&[TokenKind::Ampersand]) {
-            types.push(self.parse_postfix_type()?);
+            types.push(self.parse_conditional_type()?);
         }
 
         if types.len() == 1 {
@@ -78,6 +78,37 @@ impl Parser<'_> {
                 span: start_span.combine(&end_span),
             })
         }
+    }
+
+    fn parse_conditional_type(&mut self) -> Result<Type, ParserError> {
+        let check_type = self.parse_postfix_type()?;
+
+        // Check for conditional type: T extends U ? X : Y
+        if self.match_token(&[TokenKind::Extends]) {
+            // Parse the extends type - use primary type only to avoid consuming '?'
+            // which is the separator in conditional types, not a nullable suffix
+            let extends_type = self.parse_primary_type()?;
+            self.consume(TokenKind::Question, "Expected '?' in conditional type")?;
+            let true_type = self.parse_type()?;
+            self.consume(TokenKind::Colon, "Expected ':' in conditional type")?;
+            let false_type = self.parse_type()?;
+
+            let start_span = check_type.span;
+            let end_span = false_type.span;
+
+            return Ok(Type {
+                kind: TypeKind::Conditional(ConditionalType {
+                    check_type: Box::new(check_type),
+                    extends_type: Box::new(extends_type),
+                    true_type: Box::new(true_type),
+                    false_type: Box::new(false_type),
+                    span: start_span.combine(&end_span),
+                }),
+                span: start_span.combine(&end_span),
+            });
+        }
+
+        Ok(check_type)
     }
 
     fn parse_postfix_type(&mut self) -> Result<Type, ParserError> {
@@ -1049,6 +1080,98 @@ mod tests {
                 assert_eq!(types.len(), 2);
             }
             _ => panic!("Expected intersection of object types"),
+        }
+    }
+
+    #[test]
+    fn test_parse_conditional_type() {
+        let result = parse_type("T extends U ? X : Y");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Conditional(conditional) => {
+                // Check that check_type is a reference (T)
+                match &conditional.check_type.kind {
+                    TypeKind::Reference(_) => {}
+                    _ => panic!("Expected check_type to be a reference"),
+                }
+                // Check that extends_type is a reference (U)
+                match &conditional.extends_type.kind {
+                    TypeKind::Reference(_) => {}
+                    _ => panic!("Expected extends_type to be a reference"),
+                }
+                // Check that true_type is a reference (X)
+                match &conditional.true_type.kind {
+                    TypeKind::Reference(_) => {}
+                    _ => panic!("Expected true_type to be a reference"),
+                }
+                // Check that false_type is a reference (Y)
+                match &conditional.false_type.kind {
+                    TypeKind::Reference(_) => {}
+                    _ => panic!("Expected false_type to be a reference"),
+                }
+            }
+            _ => panic!("Expected conditional type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_conditional_type_with_primitive() {
+        let result = parse_type("T extends string ? number : boolean");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Conditional(conditional) => {
+                // Check that extends_type is string
+                match &conditional.extends_type.kind {
+                    TypeKind::Primitive(PrimitiveType::String) => {}
+                    _ => panic!("Expected extends_type to be string"),
+                }
+                // Check that true_type is number
+                match &conditional.true_type.kind {
+                    TypeKind::Primitive(PrimitiveType::Number) => {}
+                    _ => panic!("Expected true_type to be number"),
+                }
+                // Check that false_type is boolean
+                match &conditional.false_type.kind {
+                    TypeKind::Primitive(PrimitiveType::Boolean) => {}
+                    _ => panic!("Expected false_type to be boolean"),
+                }
+            }
+            _ => panic!("Expected conditional type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_conditional_type() {
+        let result = parse_type("T extends string ? (T extends number ? boolean : never) : void");
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e.message);
+        }
+        assert!(result.is_ok());
+        let typ = result.unwrap();
+        eprintln!("Parsed type kind: {:?}", typ.kind);
+        match typ.kind {
+            TypeKind::Conditional(conditional) => {
+                // Check that true_type is a nested conditional
+                eprintln!("True type kind: {:?}", conditional.true_type.kind);
+                match &conditional.true_type.kind {
+                    TypeKind::Conditional(_) => {}
+                    TypeKind::Parenthesized(inner) => {
+                        // The nested conditional might be wrapped in Parenthesized
+                        match &inner.kind {
+                            TypeKind::Conditional(_) => {}
+                            _ => panic!(
+                                "Expected nested conditional type in true branch, got: {:?}",
+                                inner.kind
+                            ),
+                        }
+                    }
+                    _ => panic!(
+                        "Expected nested conditional type in true branch, got: {:?}",
+                        conditional.true_type.kind
+                    ),
+                }
+            }
+            _ => panic!("Expected conditional type, got: {:?}", typ.kind),
         }
     }
 }
