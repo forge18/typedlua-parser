@@ -20,6 +20,7 @@ pub enum TokenKind {
     In,
     Break,
     Continue,
+    Goto,
     Repeat,
     Until,
     And,
@@ -184,6 +185,7 @@ impl TokenKind {
                 | TokenKind::In
                 | TokenKind::Break
                 | TokenKind::Continue
+                | TokenKind::Goto
                 | TokenKind::Repeat
                 | TokenKind::Until
                 | TokenKind::And
@@ -243,6 +245,7 @@ impl TokenKind {
             TokenKind::In => Some("in"),
             TokenKind::Break => Some("break"),
             TokenKind::Continue => Some("continue"),
+            TokenKind::Goto => Some("goto"),
             TokenKind::Repeat => Some("repeat"),
             TokenKind::Until => Some("until"),
             TokenKind::And => Some("and"),
@@ -319,6 +322,7 @@ impl TokenKind {
                 "from" => Some(TokenKind::From),
                 "when" => Some(TokenKind::When),
                 "true" => Some(TokenKind::True),
+                "goto" => Some(TokenKind::Goto),
                 _ => None,
             },
             5 => match s {

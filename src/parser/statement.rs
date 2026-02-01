@@ -50,6 +50,8 @@ impl StatementParser for Parser<'_> {
             TokenKind::Try => self.parse_try_statement(),
             TokenKind::Rethrow => self.parse_rethrow_statement(),
             TokenKind::Namespace => self.parse_namespace_declaration(),
+            TokenKind::Goto => self.parse_goto_statement(),
+            TokenKind::ColonColon => self.parse_label_statement(),
             _ => {
                 // Expression statement
                 let expr = self.parse_expression()?;
@@ -114,6 +116,8 @@ impl Spannable for Statement {
             Statement::Repeat(r) => r.span,
             Statement::Return(r) => r.span,
             Statement::Break(s) | Statement::Continue(s) => *s,
+            Statement::Label(l) => l.span,
+            Statement::Goto(g) => g.span,
             Statement::Expression(e) => e.span,
             Statement::Block(b) => b.span,
             Statement::DeclareFunction(f) => f.span,
@@ -131,6 +135,31 @@ impl Spannable for Statement {
 
 // Statement implementations
 impl Parser<'_> {
+    fn parse_label_statement(&mut self) -> Result<Statement, ParserError> {
+        let start_span = self.current_span();
+        self.consume(TokenKind::ColonColon, "Expected '::'")?;
+        let name = self.parse_identifier()?;
+        self.consume(TokenKind::ColonColon, "Expected '::' after label name")?;
+        let end_span = self.current_span();
+
+        Ok(Statement::Label(LabelStatement {
+            name,
+            span: start_span.combine(&end_span),
+        }))
+    }
+
+    fn parse_goto_statement(&mut self) -> Result<Statement, ParserError> {
+        let start_span = self.current_span();
+        self.consume(TokenKind::Goto, "Expected 'goto'")?;
+        let target = self.parse_identifier()?;
+        let end_span = target.span;
+
+        Ok(Statement::Goto(GotoStatement {
+            target,
+            span: start_span.combine(&end_span),
+        }))
+    }
+
     fn parse_variable_declaration(&mut self) -> Result<Statement, ParserError> {
         let start_span = self.current_span();
         let kind = if matches!(self.current().kind, TokenKind::Const) {
