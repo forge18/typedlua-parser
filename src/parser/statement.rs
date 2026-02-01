@@ -14,6 +14,7 @@ pub trait StatementParser {
 
 impl StatementParser for Parser<'_> {
     fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+        eprintln!("[PARSER-DEBUG] parse_statement: current token = {:?}", self.current().kind);
         // Check for decorators first
         if self.check(&TokenKind::At) {
             return self.parse_class_declaration();
