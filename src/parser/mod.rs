@@ -84,7 +84,6 @@ impl<'a> Parser<'a> {
                     self.is_first_statement = false;
                 }
                 Err(e) => {
-                    eprintln!("[PARSER-DEBUG] parse error: {} at {:?}", e.message, e.span);
                     self.report_error(&e.message, e.span);
                     // Error recovery: skip to next statement
                     self.synchronize();
@@ -157,6 +156,27 @@ impl<'a> Parser<'a> {
             message: message.to_string(),
             span: self.current_span(),
         })
+    }
+
+    /// Consume a closing `>` for type arguments.
+    /// Handles the `>>` ambiguity: if the current token is `>>`, it is split
+    /// by mutating it in-place to a single `>` (without advancing), so the
+    /// outer generic context can later consume the remaining `>`.
+    fn consume_closing_angle_bracket(&mut self) -> Result<(), ParserError> {
+        if self.check(&TokenKind::GreaterThan) {
+            self.advance();
+            Ok(())
+        } else if self.check(&TokenKind::GreaterGreater) {
+            // Split '>>' into two '>': mutate the token to '>' for the outer
+            // context and don't advance (we logically consumed only the first '>').
+            self.tokens[self.position].kind = TokenKind::GreaterThan;
+            Ok(())
+        } else {
+            Err(ParserError {
+                message: "Expected '>' after type arguments".to_string(),
+                span: self.current_span(),
+            })
+        }
     }
 
     #[inline(always)]

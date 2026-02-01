@@ -397,10 +397,10 @@ impl Parser<'_> {
             let constructor = self.parse_postfix()?;
 
             // new expressions must be followed by a call
-            if let ExpressionKind::Call(callee, args, _) = constructor.kind {
+            if let ExpressionKind::Call(callee, args, type_args) = constructor.kind {
                 let span = start_span.combine(&constructor.span);
                 return Ok(Expression {
-                    kind: ExpressionKind::New(callee, args),
+                    kind: ExpressionKind::New(callee, args, type_args),
                     span,
                     ..Default::default()
                 });
@@ -1763,7 +1763,7 @@ mod tests {
         let result = parse_expression("new MyClass()");
         assert!(result.is_ok());
         match result.unwrap().kind {
-            ExpressionKind::New(_, _) => {}
+            ExpressionKind::New(_, _, _) => {}
             _ => panic!("Expected new expression"),
         }
     }

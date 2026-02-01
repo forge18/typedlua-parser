@@ -1,8 +1,10 @@
 use super::{Parser, ParserError};
 use crate::ast::expression::Literal;
+use crate::ast::statement::TypeParameter;
 use crate::ast::types::*;
 use crate::ast::Spanned;
 use crate::lexer::TokenKind;
+use crate::span::Span;
 
 pub trait TypeParser {
     fn parse_type(&mut self) -> Result<Type, ParserError>;
@@ -190,7 +192,7 @@ impl Parser<'_> {
 
                 let type_arguments = if self.match_token(&[TokenKind::LessThan]) {
                     let args = self.parse_type_arguments()?;
-                    self.consume(TokenKind::GreaterThan, "Expected '>' after type arguments")?;
+                    self.consume_closing_angle_bracket()?;
                     Some(args)
                 } else {
                     None
@@ -250,6 +252,17 @@ impl Parser<'_> {
                 })
             }
 
+            // Keyof type: keyof T
+            TokenKind::Keyof => {
+                self.advance();
+                let operand = self.parse_primary_type()?;
+                let end_span = operand.span;
+                Ok(Type {
+                    kind: TypeKind::KeyOf(Box::new(operand)),
+                    span: start_span.combine(&end_span),
+                })
+            }
+
             // Object type: { ... }
             TokenKind::LeftBrace => self.parse_object_type(),
 
@@ -294,6 +307,32 @@ impl Parser<'_> {
     fn parse_object_type(&mut self) -> Result<Type, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBrace, "Expected '{'")?;
+
+        // Check for mapped type: { [K in T]: V } or { readonly [K in T]?: V }
+        // Look ahead to see if this is a mapped type
+        let checkpoint = self.position;
+
+        // Skip readonly modifier if present
+        if self.check(&TokenKind::Readonly) {
+            self.advance();
+        }
+
+        if self.check(&TokenKind::LeftBracket) {
+            // Save position and try to parse as mapped type
+            self.advance(); // consume '['
+
+            // Check if next token is an identifier followed by 'in'
+            if let TokenKind::Identifier(_) = self.current().kind {
+                self.advance(); // consume identifier
+                if self.check(&TokenKind::In) {
+                    // This looks like a mapped type, rewind and parse it
+                    self.position = checkpoint;
+                    return self.parse_mapped_type(start_span);
+                }
+            }
+        }
+        // Not a mapped type, rewind and continue with object type parsing
+        self.position = checkpoint;
 
         let mut members = Vec::new();
 
@@ -367,6 +406,95 @@ impl Parser<'_> {
         })
     }
 
+    fn parse_mapped_type(&mut self, start_span: Span) -> Result<Type, ParserError> {
+        use crate::ast::types::{MappedType, MappedTypeModifier};
+
+        // Check for readonly modifier before the bracket: readonly [K in T]
+        // or with +/- prefix: +readonly [K in T] or -readonly [K in T]
+        let readonly_modifier = if self.match_token(&[TokenKind::Plus]) {
+            self.consume(TokenKind::Readonly, "Expected 'readonly' after '+'")?;
+            MappedTypeModifier::Add
+        } else if self.match_token(&[TokenKind::Minus]) {
+            self.consume(TokenKind::Readonly, "Expected 'readonly' after '-'")?;
+            MappedTypeModifier::Remove
+        } else if self.match_token(&[TokenKind::Readonly]) {
+            MappedTypeModifier::Add
+        } else {
+            MappedTypeModifier::None
+        };
+
+        self.consume(TokenKind::LeftBracket, "Expected '[' in mapped type")?;
+
+        // Parse type parameter name (e.g., K in "[K in T]")
+        let param_name = self.parse_identifier()?;
+        let param_span = param_name.span;
+        let type_parameter = TypeParameter {
+            name: param_name,
+            constraint: None,
+            default: None,
+            span: param_span,
+        };
+
+        self.consume(TokenKind::In, "Expected 'in' in mapped type")?;
+
+        // Parse the 'in' type (e.g., keyof T)
+        let in_type = self.parse_type()?;
+
+        self.consume(
+            TokenKind::RightBracket,
+            "Expected ']' after mapped type parameter",
+        )?;
+
+        // Check for optional modifier: ?, +?, or -?
+        let optional_modifier = if self.match_token(&[TokenKind::Question]) {
+            MappedTypeModifier::Add
+        } else if self.check(&TokenKind::Plus) || self.check(&TokenKind::Minus) {
+            let checkpoint = self.position;
+            if self.match_token(&[TokenKind::Plus]) {
+                if self.match_token(&[TokenKind::Question]) {
+                    MappedTypeModifier::Add
+                } else {
+                    self.position = checkpoint;
+                    MappedTypeModifier::None
+                }
+            } else if self.match_token(&[TokenKind::Minus]) {
+                if self.match_token(&[TokenKind::Question]) {
+                    MappedTypeModifier::Remove
+                } else {
+                    self.position = checkpoint;
+                    MappedTypeModifier::None
+                }
+            } else {
+                MappedTypeModifier::None
+            }
+        } else {
+            MappedTypeModifier::None
+        };
+
+        self.consume(TokenKind::Colon, "Expected ':' in mapped type")?;
+
+        // Parse the value type
+        let value_type = self.parse_type()?;
+
+        // Optional semicolon
+        self.match_token(&[TokenKind::Semicolon]);
+
+        let end_span = self.current_span();
+        self.consume(TokenKind::RightBrace, "Expected '}' after mapped type")?;
+
+        Ok(Type {
+            kind: TypeKind::Mapped(MappedType {
+                readonly_modifier,
+                type_parameter: Box::new(type_parameter),
+                in_type: Box::new(in_type),
+                optional_modifier,
+                value_type: Box::new(value_type),
+                span: start_span.combine(&end_span),
+            }),
+            span: start_span.combine(&end_span),
+        })
+    }
+
     fn parse_tuple_type(&mut self) -> Result<Type, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
@@ -403,15 +531,18 @@ impl Parser<'_> {
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')'")?;
 
-            // Check if this is actually a function type (should have ->)
-            if !self.check(&TokenKind::Arrow) {
+            // Check if this is actually a function type (should have -> or =>)
+            if !self.check(&TokenKind::Arrow) && !self.check(&TokenKind::FatArrow) {
                 return Err(ParserError {
                     message: "Not a function type".to_string(),
                     span: start_span,
                 });
             }
 
-            self.consume(TokenKind::Arrow, "Expected '->'")?;
+            // Accept both -> and => for function type arrow
+            if !self.match_token(&[TokenKind::Arrow]) {
+                self.consume(TokenKind::FatArrow, "Expected '->' or '=>'")?;
+            }
             let return_type = Box::new(self.parse_type()?);
             let end_span = return_type.span;
 
@@ -1180,6 +1311,81 @@ mod tests {
                 }
             }
             _ => panic!("Expected conditional type, got: {:?}", typ.kind),
+        }
+    }
+
+    #[test]
+    fn test_parse_mapped_type_basic() {
+        let result = parse_type("{ [K in T]: V }");
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e.message);
+        }
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Mapped(mapped) => {
+                assert_eq!(mapped.readonly_modifier, MappedTypeModifier::None);
+                assert_eq!(mapped.optional_modifier, MappedTypeModifier::None);
+            }
+            _ => panic!("Expected mapped type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mapped_type_with_keyof() {
+        let result = parse_type("{ [K in keyof T]: T[K] }");
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e.message);
+        }
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Mapped(mapped) => {
+                // Check that in_type is a KeyOf expression
+                match &mapped.in_type.kind {
+                    TypeKind::KeyOf(_) => {}
+                    _ => panic!("Expected keyof expression in mapped type"),
+                }
+            }
+            _ => panic!("Expected mapped type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mapped_type_with_readonly() {
+        let result = parse_type("{ readonly [K in T]: V }");
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e.message);
+        }
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Mapped(mapped) => {
+                assert_eq!(mapped.readonly_modifier, MappedTypeModifier::Add);
+            }
+            _ => panic!("Expected mapped type with readonly"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mapped_type_with_optional() {
+        let result = parse_type("{ [K in T]?: V }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Mapped(mapped) => {
+                assert_eq!(mapped.optional_modifier, MappedTypeModifier::Add);
+            }
+            _ => panic!("Expected mapped type with optional"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mapped_type_with_modifiers() {
+        let result = parse_type("{ readonly [K in T]?: V }");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::Mapped(mapped) => {
+                assert_eq!(mapped.readonly_modifier, MappedTypeModifier::Add);
+                assert_eq!(mapped.optional_modifier, MappedTypeModifier::Add);
+            }
+            _ => panic!("Expected mapped type with modifiers"),
         }
     }
 }
