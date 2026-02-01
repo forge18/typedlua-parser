@@ -54,6 +54,7 @@ pub enum TokenKind {
     Infer,
     Is,
     Instanceof,
+    Typeof,
     Declare,
     Namespace,
     Constructor,
@@ -219,6 +220,7 @@ impl TokenKind {
                 | TokenKind::Infer
                 | TokenKind::Is
                 | TokenKind::Instanceof
+                | TokenKind::Typeof
                 | TokenKind::Declare
                 | TokenKind::Namespace
                 | TokenKind::Constructor
@@ -279,6 +281,7 @@ impl TokenKind {
             TokenKind::Infer => Some("infer"),
             TokenKind::Is => Some("is"),
             TokenKind::Instanceof => Some("instanceof"),
+            TokenKind::Typeof => Some("typeof"),
             TokenKind::Declare => Some("declare"),
             TokenKind::Namespace => Some("namespace"),
             TokenKind::Constructor => Some("constructor"),
@@ -351,6 +354,7 @@ impl TokenKind {
                 "public" => Some(TokenKind::Public),
                 "static" => Some(TokenKind::Static),
                 "throws" => Some(TokenKind::Throws),
+                "typeof" => Some(TokenKind::Typeof),
                 _ => None,
             },
             7 => match s {
@@ -377,7 +381,6 @@ impl TokenKind {
                 _ => None,
             },
             10 => match s {
-                "implements" => Some(TokenKind::Implements),
                 "instanceof" => Some(TokenKind::Instanceof),
                 _ => None,
             },

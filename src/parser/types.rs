@@ -1,4 +1,4 @@
-use super::{Parser, ParserError};
+use super::{ExpressionParser, Parser, ParserError};
 use crate::ast::expression::Literal;
 use crate::ast::statement::TypeParameter;
 use crate::ast::types::*;
@@ -263,6 +263,23 @@ impl Parser<'_> {
                 })
             }
 
+
+            // Typeof type: typeof(expression)
+            TokenKind::Typeof => {
+                self.advance();
+                self.consume(TokenKind::LeftParen, "Expected '(' after 'typeof'")?;
+                
+                // Parse the expression inside typeof()
+                let expr = self.parse_expression()?;
+                
+                self.consume(TokenKind::RightParen, "Expected ')' after typeof expression")?;
+                
+                let end_span = self.current_span();
+                Ok(Type {
+                    kind: TypeKind::TypeQuery(Box::new(expr)),
+                    span: start_span.combine(&end_span),
+                })
+            }
             // Template literal type: `hello ${T}`
             TokenKind::TemplateString(parts) => {
                 self.advance();
