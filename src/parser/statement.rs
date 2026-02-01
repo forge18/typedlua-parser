@@ -3554,8 +3554,7 @@ mod tests {
 
     #[test]
     fn test_parse_generic_class_with_method() {
-        let result =
-            parse_statement("class Box<T> { getValue(): T { return self.value } }");
+        let result = parse_statement("class Box<T> { getValue(): T { return self.value } }");
         assert!(
             result.is_ok(),
             "Generic class with method should parse: {:?}",
