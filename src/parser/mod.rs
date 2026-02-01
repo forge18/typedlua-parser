@@ -244,6 +244,8 @@ impl Spannable for crate::ast::statement::Statement {
             Repeat(r) => r.span,
             Return(r) => r.span,
             Break(s) | Continue(s) => *s,
+            Label(l) => l.span,
+            Goto(g) => g.span,
             Expression(e) => e.span,
             Block(b) => b.span,
             DeclareFunction(f) => f.span,
