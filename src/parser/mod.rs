@@ -84,6 +84,7 @@ impl<'a> Parser<'a> {
                     self.is_first_statement = false;
                 }
                 Err(e) => {
+                    eprintln!("[PARSER-DEBUG] parse error: {} at {:?}", e.message, e.span);
                     self.report_error(&e.message, e.span);
                     // Error recovery: skip to next statement
                     self.synchronize();
