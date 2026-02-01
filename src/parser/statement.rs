@@ -452,7 +452,8 @@ impl Parser<'_> {
                 members.push(InterfaceMember::Index(self.parse_index_signature()?));
             } else {
                 let is_readonly = self.match_token(&[TokenKind::Readonly]);
-                let name = self.parse_identifier()?;
+                // Allow keywords as property/method names in interfaces
+                let name = self.parse_interface_member_name()?;
 
                 if self.check(&TokenKind::LeftParen) || self.check(&TokenKind::LessThan) {
                     // Method signature
@@ -514,24 +515,62 @@ impl Parser<'_> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
 
-        let key_name = self.parse_identifier()?;
-        self.consume(TokenKind::Colon, "Expected ':' after index key name")?;
+        // Check if we have [string] or [number] directly (without key name)
+        // or [key: string] or [key: number] (with key name)
+        // or [K]: V where K is a type parameter
+        let (key_name, key_type) = if let TokenKind::Identifier(s) = &self.current().kind {
+            let name = self.resolve(*s);
+            let s_copy = *s; // Copy the StringId before we advance
+            if name == "string" || name == "number" {
+                // Direct [string] or [number] syntax
+                let key_type = if name == "string" {
+                    self.advance();
+                    IndexKeyType::String
+                } else {
+                    self.advance();
+                    IndexKeyType::Number
+                };
+                // Create a dummy identifier for key_name
+                let key_name = Spanned::new(s_copy, start_span);
+                (key_name, key_type)
+            } else {
+                // Check if next token is ':' (indicating [key: type] syntax)
+                // or ']' (indicating [Type] syntax with type parameter)
+                let key_name = self.parse_identifier()?;
 
-        let key_type = match &self.current().kind {
-            TokenKind::Identifier(s) if self.resolve(*s) == "string" => {
-                self.advance();
-                IndexKeyType::String
+                if self.check(&TokenKind::Colon) {
+                    // [key: type] syntax
+                    self.consume(TokenKind::Colon, "Expected ':' after index key name")?;
+
+                    let key_type = match &self.current().kind {
+                        TokenKind::Identifier(s) if self.resolve(*s) == "string" => {
+                            self.advance();
+                            IndexKeyType::String
+                        }
+                        TokenKind::Identifier(s) if self.resolve(*s) == "number" => {
+                            self.advance();
+                            IndexKeyType::Number
+                        }
+                        _ => {
+                            return Err(ParserError {
+                                message: "Index signature key must be 'string' or 'number'"
+                                    .to_string(),
+                                span: self.current_span(),
+                            })
+                        }
+                    };
+                    (key_name, key_type)
+                } else {
+                    // [Type] syntax with type parameter (e.g., [K]: V)
+                    // Treat it as a string index for now
+                    (key_name, IndexKeyType::String)
+                }
             }
-            TokenKind::Identifier(s) if self.resolve(*s) == "number" => {
-                self.advance();
-                IndexKeyType::Number
-            }
-            _ => {
-                return Err(ParserError {
-                    message: "Index signature key must be 'string' or 'number'".to_string(),
-                    span: self.current_span(),
-                })
-            }
+        } else {
+            return Err(ParserError {
+                message: "Expected identifier in index signature".to_string(),
+                span: self.current_span(),
+            });
         };
 
         self.consume(TokenKind::RightBracket, "Expected ']'")?;
@@ -585,6 +624,17 @@ impl Parser<'_> {
 
         let name = self.parse_identifier()?;
 
+        // Parse optional implements clause
+        let mut implements = Vec::new();
+        if self.match_token(&[TokenKind::Implements]) {
+            loop {
+                implements.push(self.parse_type()?);
+                if !self.match_token(&[TokenKind::Comma]) {
+                    break;
+                }
+            }
+        }
+
         self.consume(TokenKind::LeftBrace, "Expected '{' after enum name")?;
 
         let mut members = Vec::new();
@@ -611,25 +661,78 @@ impl Parser<'_> {
                     });
                     is_rich_enum = true;
                 } else if self.check(&TokenKind::LeftParen) {
-                    self.consume(TokenKind::LeftParen, "Expected '(' after enum member name")?;
-                    let mut arguments = Vec::new();
-                    while !self.check(&TokenKind::RightParen) && !self.is_at_end() {
-                        let arg = self.parse_expression()?;
-                        arguments.push(arg);
-                        if !self.check(&TokenKind::RightParen) {
-                            self.consume(TokenKind::Comma, "Expected ',' between arguments")?;
+                    // Disambiguate between method definition and member invocation.
+                    // Method: `name(): void { ... }` or `name(param: type): void { ... }`
+                    // Member: `name("value")` or `name(42)`
+                    // Check: after `(`, if `)` is followed by `:` or `{`, or if first
+                    // thing inside parens is `identifier :` (typed param), it's a method.
+                    let is_method = {
+                        // nth_token_kind(0) is `(`, nth_token_kind(1) is what follows
+                        let after_paren = self.nth_token_kind(1);
+                        match after_paren {
+                            // Empty params: `name()` - check what follows `)`
+                            Some(TokenKind::RightParen) => {
+                                // After `)`, check for `:` (return type) or `{` (body)
+                                matches!(
+                                    self.nth_token_kind(2),
+                                    Some(TokenKind::Colon) | Some(TokenKind::LeftBrace)
+                                )
+                            }
+                            // Typed param: `name(param: type, ...)`
+                            Some(TokenKind::Identifier(_)) => {
+                                matches!(self.nth_token_kind(2), Some(TokenKind::Colon))
+                            }
+                            _ => false,
                         }
-                    }
-                    self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
-                    let member_end = self.current_span();
+                    };
 
-                    members.push(EnumMember {
-                        name: member_name,
-                        arguments,
-                        value: None,
-                        span: member_start.combine(&member_end),
-                    });
-                    is_rich_enum = true;
+                    if is_method {
+                        // Parse as method definition
+                        self.consume(TokenKind::LeftParen, "Expected '('")?;
+                        let params = self.parse_typed_parameter_list()?;
+                        self.consume(
+                            TokenKind::RightParen,
+                            "Expected ')' after method parameters",
+                        )?;
+                        let return_type = if self.match_token(&[TokenKind::Colon]) {
+                            Some(self.parse_type()?)
+                        } else {
+                            None
+                        };
+                        self.consume(TokenKind::LeftBrace, "Expected '{' after method signature")?;
+                        let body = self.parse_block()?;
+                        self.consume(TokenKind::RightBrace, "Expected '}' after method body")?;
+                        let method_end = self.current_span();
+                        methods.push(EnumMethod {
+                            name: member_name,
+                            parameters: params,
+                            return_type,
+                            body,
+                            span: member_start.combine(&method_end),
+                        });
+                        is_rich_enum = true;
+                    } else {
+                        // Parse as member with arguments
+                        self.consume(TokenKind::LeftParen, "Expected '(' after enum member name")?;
+                        let mut arguments = Vec::new();
+                        while !self.check(&TokenKind::RightParen) && !self.is_at_end() {
+                            let arg = self.parse_expression()?;
+                            arguments.push(arg);
+                            if !self.check(&TokenKind::RightParen) {
+                                self.consume(TokenKind::Comma, "Expected ',' between arguments")?;
+                            }
+                        }
+                        self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
+                        let member_end = self.current_span();
+
+                        members.push(EnumMember {
+                            name: member_name,
+                            arguments,
+                            value: None,
+                            span: member_start.combine(&member_end),
+                        });
+                        is_rich_enum = true;
+                    }
                 } else {
                     let value = if self.match_token(&[TokenKind::Equal]) {
                         match &self.current().kind {
@@ -722,8 +825,10 @@ impl Parser<'_> {
                 });
             }
 
+            // Commas are optional separators in rich enums (like class member syntax).
+            // For simple enums they're still expected between members.
             if !self.check(&TokenKind::RightBrace) {
-                self.consume(TokenKind::Comma, "Expected ',' between enum members")?;
+                self.match_token(&[TokenKind::Comma]);
             }
         }
 
@@ -736,6 +841,7 @@ impl Parser<'_> {
             fields: if is_rich_enum { fields } else { Vec::new() },
             constructor: if is_rich_enum { constructor } else { None },
             methods: if is_rich_enum { methods } else { Vec::new() },
+            implements,
             span: start_span.combine(&end_span),
         }))
     }
@@ -772,7 +878,29 @@ impl Parser<'_> {
                 });
             }
             let name = self.parse_identifier()?;
-            ImportClause::Default(name)
+
+            // Check for alias: default as LocalName
+            let local_name = if self.match_token(&[TokenKind::As]) {
+                self.parse_identifier()?
+            } else {
+                name.clone()
+            };
+
+            // Check for mixed import: default, { named }
+            if self.match_token(&[TokenKind::Comma]) {
+                self.consume(
+                    TokenKind::LeftBrace,
+                    "Expected '{' after ',' in mixed import",
+                )?;
+                let specifiers = self.parse_import_specifiers()?;
+                self.consume(TokenKind::RightBrace, "Expected '}'")?;
+                ImportClause::Mixed {
+                    default: local_name,
+                    named: specifiers,
+                }
+            } else {
+                ImportClause::Default(local_name)
+            }
         };
 
         self.consume(TokenKind::From, "Expected 'from' in import")?;
@@ -844,8 +972,18 @@ impl Parser<'_> {
         };
 
         let kind = if is_default {
-            let expr = self.parse_expression()?;
-            ExportKind::Default(Box::new(expr))
+            // Check if this is a class or function declaration
+            // If so, treat it as a declaration export, not an expression export
+            if matches!(
+                &self.current().kind,
+                TokenKind::Class | TokenKind::Abstract | TokenKind::Final | TokenKind::Function
+            ) {
+                let decl = self.parse_statement()?;
+                ExportKind::Declaration(Box::new(decl))
+            } else {
+                let expr = self.parse_expression()?;
+                ExportKind::Default(Box::new(expr))
+            }
         } else if self.check(&TokenKind::LeftBrace) {
             self.consume(TokenKind::LeftBrace, "Expected '{'")?;
             let specifiers = self.parse_export_specifiers()?;
@@ -1039,7 +1177,10 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParserError {
-                        message: "Expected 'function' or 'const' in namespace".to_string(),
+                        message: format!(
+                            "Expected 'function' or 'const' in namespace, found {:?}",
+                            self.current().kind
+                        ),
                         span: self.current_span(),
                     });
                 }
@@ -1266,8 +1407,8 @@ impl Parser<'_> {
                 initializer,
                 span: start_span.combine(&end_span),
             }))
-        } else if self.check(&TokenKind::LeftParen) {
-            // Method
+        } else if self.check(&TokenKind::LessThan) || self.check(&TokenKind::LeftParen) {
+            // Method (may have type parameters before the parameter list)
             let type_parameters = if self.match_token(&[TokenKind::LessThan]) {
                 Some(self.parse_type_parameters()?)
             } else {
@@ -1936,6 +2077,43 @@ impl Parser<'_> {
         Ok(Spanned::new(name, span))
     }
 
+    /// Parse an identifier or keyword for interface member names
+    /// This allows keywords like 'type' to be used as property names
+    fn parse_interface_member_name(&mut self) -> Result<Ident, ParserError> {
+        let span = self.current_span();
+
+        match &self.current().kind {
+            TokenKind::Identifier(name) => {
+                let id = *name;
+                self.advance();
+                Ok(Spanned::new(id, span))
+            }
+            kind if kind.is_keyword() => {
+                // Allow keywords as member names in interfaces
+                if let Some(s) = kind.to_keyword_str() {
+                    let id = self.interner.intern(s);
+                    self.advance();
+                    Ok(Spanned::new(id, span))
+                } else {
+                    Err(ParserError {
+                        message: format!(
+                            "Internal error: keyword {:?} missing string representation",
+                            kind
+                        ),
+                        span,
+                    })
+                }
+            }
+            _ => Err(ParserError {
+                message: format!(
+                    "Expected identifier or keyword, got {:?}",
+                    self.current().kind
+                ),
+                span,
+            }),
+        }
+    }
+
     pub(super) fn parse_type_parameters(&mut self) -> Result<Vec<TypeParameter>, ParserError> {
         let mut params = Vec::new();
 
@@ -1943,7 +2121,7 @@ impl Parser<'_> {
             let param_start = self.current_span();
             let name = self.parse_identifier()?;
 
-            let constraint = if self.match_token(&[TokenKind::Extends]) {
+            let constraint = if self.match_token(&[TokenKind::Extends, TokenKind::Implements]) {
                 Some(Box::new(self.parse_type()?))
             } else {
                 None
@@ -1985,7 +2163,14 @@ impl Parser<'_> {
             let param_start = self.current_span();
             let is_rest = self.match_token(&[TokenKind::DotDotDot]);
 
-            let pattern = self.parse_pattern()?;
+            // If we have a rest parameter but no identifier (just `...`),
+            // create a wildcard pattern
+            let pattern =
+                if is_rest && self.check(&TokenKind::RightParen) || self.check(&TokenKind::Comma) {
+                    Pattern::Wildcard(param_start)
+                } else {
+                    self.parse_pattern()?
+                };
 
             let is_optional = self.match_token(&[TokenKind::Question]);
 
@@ -2032,6 +2217,9 @@ impl Parser<'_> {
         loop {
             let param_start = self.current_span();
 
+            // Parse decorators on constructor parameters (e.g., @readonly)
+            let decorators = self.parse_decorators()?;
+
             let access = if self.match_token(&[TokenKind::Public]) {
                 Some(AccessModifier::Public)
             } else if self.match_token(&[TokenKind::Private]) {
@@ -2042,7 +2230,22 @@ impl Parser<'_> {
                 None
             };
 
-            let is_readonly = self.match_token(&[TokenKind::Readonly]);
+            let mut is_readonly = self.match_token(&[TokenKind::Readonly]);
+
+            // Check if @readonly decorator was used
+            if !is_readonly {
+                for dec in &decorators {
+                    if let crate::ast::statement::DecoratorExpression::Identifier(ident) =
+                        &dec.expression
+                    {
+                        let name_str = self.interner.resolve(ident.node);
+                        if name_str == "readonly" {
+                            is_readonly = true;
+                            break;
+                        }
+                    }
+                }
+            }
 
             let name = self.parse_identifier()?;
 
@@ -2061,6 +2264,7 @@ impl Parser<'_> {
             let param_end = self.current_span();
 
             params.push(ConstructorParameter {
+                decorators,
                 access,
                 is_readonly,
                 name,
@@ -2111,5 +2315,1157 @@ impl Parser<'_> {
         }
 
         Ok(params)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Program;
+    use crate::diagnostics::CollectingDiagnosticHandler;
+    use crate::lexer::Lexer;
+    use crate::span::Span;
+    use crate::string_interner::StringInterner;
+    use std::sync::Arc;
+
+    fn parse_statement(source: &str) -> Result<Statement, ParserError> {
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let mut lexer = Lexer::new(source, handler.clone(), &interner);
+        let tokens = lexer.tokenize().map_err(|e| ParserError {
+            message: format!("Lexer error: {:?}", e),
+            span: Span::default(),
+        })?;
+        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        parser.parse_statement()
+    }
+
+    fn parse_program(source: &str) -> Result<Program, ParserError> {
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let mut lexer = Lexer::new(source, handler.clone(), &interner);
+        let tokens = lexer.tokenize().map_err(|e| ParserError {
+            message: format!("Lexer error: {:?}", e),
+            span: Span::default(),
+        })?;
+        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        parser.parse()
+    }
+
+    #[test]
+    fn test_parse_local_variable_declaration() {
+        let result = parse_statement("local x = 42");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Variable(var) => {
+                assert!(matches!(var.kind, VariableKind::Local));
+            }
+            _ => panic!("Expected variable declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_const_variable_declaration() {
+        let result = parse_statement("const x = 42");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Variable(var) => {
+                assert!(matches!(var.kind, VariableKind::Const));
+            }
+            _ => panic!("Expected const declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_variable_with_type_annotation() {
+        let result = parse_statement("local x: number = 42");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Variable(var) => {
+                assert!(var.type_annotation.is_some());
+            }
+            _ => panic!("Expected variable declaration with type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_declaration() {
+        let result = parse_statement("function foo() end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(_) => {}
+            _ => panic!("Expected function declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_params() {
+        let result = parse_statement("function foo(x: number, y: string): number return x end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(func) => {
+                assert_eq!(func.parameters.len(), 2);
+                assert!(func.return_type.is_some());
+            }
+            _ => panic!("Expected function declaration with params"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_braces() {
+        let result = parse_statement("function foo() { return 42 }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(_) => {}
+            _ => panic!("Expected function declaration with braces"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_statement() {
+        let result = parse_statement("if true then end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::If(_) => {}
+            _ => panic!("Expected if statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_else_statement() {
+        let result = parse_statement("if true then else end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::If(if_stmt) => {
+                assert!(if_stmt.else_block.is_some());
+            }
+            _ => panic!("Expected if-else statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_if_elseif_statement() {
+        let result = parse_statement("if true then elseif false then end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::If(if_stmt) => {
+                assert_eq!(if_stmt.else_ifs.len(), 1);
+            }
+            _ => panic!("Expected if-elseif statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_while_statement() {
+        let result = parse_statement("while true do end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::While(_) => {}
+            _ => panic!("Expected while statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_repeat_statement() {
+        let result = parse_statement("repeat until true");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Repeat(_) => {}
+            _ => panic!("Expected repeat statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_numeric_for() {
+        let result = parse_statement("for i = 1, 10 do end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::For(for_stmt) => match for_stmt.as_ref() {
+                ForStatement::Numeric(_) => {}
+                _ => panic!("Expected numeric for"),
+            },
+            _ => panic!("Expected for statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_numeric_for_with_step() {
+        let result = parse_statement("for i = 1, 10, 2 do end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::For(for_stmt) => match for_stmt.as_ref() {
+                ForStatement::Numeric(num) => {
+                    assert!(num.step.is_some());
+                }
+                _ => panic!("Expected numeric for with step"),
+            },
+            _ => panic!("Expected for statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_generic_for() {
+        let result = parse_statement("for k, v in pairs(t) do end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::For(for_stmt) => match for_stmt.as_ref() {
+                ForStatement::Generic(gen) => {
+                    assert_eq!(gen.variables.len(), 2);
+                    assert_eq!(gen.iterators.len(), 1);
+                }
+                _ => panic!("Expected generic for"),
+            },
+            _ => panic!("Expected for statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_return_statement() {
+        let result = parse_statement("return 42");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Return(ret) => {
+                assert_eq!(ret.values.len(), 1);
+            }
+            _ => panic!("Expected return statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_return_multiple_values() {
+        let result = parse_statement("return 1, 2, 3");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Return(ret) => {
+                assert_eq!(ret.values.len(), 3);
+            }
+            _ => panic!("Expected return statement with multiple values"),
+        }
+    }
+
+    #[test]
+    fn test_parse_break_statement() {
+        let result = parse_statement("break");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Break(_) => {}
+            _ => panic!("Expected break statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_continue_statement() {
+        let result = parse_statement("continue");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Continue(_) => {}
+            _ => panic!("Expected continue statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_declaration() {
+        let result = parse_statement("interface Foo {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(_) => {}
+            _ => panic!("Expected interface declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_with_extends() {
+        let result = parse_statement("interface Foo extends Bar, Baz {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert_eq!(iface.extends.len(), 2);
+            }
+            _ => panic!("Expected interface with extends"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_with_members() {
+        let result = parse_statement("interface Foo { x: number, y: string }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert_eq!(iface.members.len(), 2);
+            }
+            _ => panic!("Expected interface with members"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_alias() {
+        let result = parse_statement("type MyType = number");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::TypeAlias(_) => {}
+            _ => panic!("Expected type alias"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_alias_with_params() {
+        let result = parse_statement("type Container<T> = { value: T }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::TypeAlias(type_alias) => {
+                assert!(type_alias.type_parameters.is_some());
+            }
+            _ => panic!("Expected type alias with params"),
+        }
+    }
+
+    #[test]
+    fn test_parse_simple_enum() {
+        let result = parse_statement("enum Color { Red, Green, Blue }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert_eq!(enm.members.len(), 3);
+            }
+            _ => panic!("Expected enum declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_with_values() {
+        let result = parse_statement("enum Status { Ok = 200, Error = 500 }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert_eq!(enm.members.len(), 2);
+            }
+            _ => panic!("Expected enum with values"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import_default() {
+        let result = parse_statement("import foo from 'module'");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Import(_) => {}
+            _ => panic!("Expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import_named() {
+        let result = parse_statement("import { foo, bar } from 'module'");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Import(imp) => match imp.clause {
+                ImportClause::Named(specs) => assert_eq!(specs.len(), 2),
+                _ => panic!("Expected named import"),
+            },
+            _ => panic!("Expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import_namespace() {
+        let result = parse_statement("import * as foo from 'module'");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Import(imp) => match imp.clause {
+                ImportClause::Namespace(_) => {}
+                _ => panic!("Expected namespace import"),
+            },
+            _ => panic!("Expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_default() {
+        let result = parse_statement("export default 42");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Export(_) => {}
+            _ => panic!("Expected export statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_named() {
+        let result = parse_statement("export { foo, bar }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Export(exp) => match exp.kind {
+                ExportKind::Named { specifiers, .. } => assert_eq!(specifiers.len(), 2),
+                _ => panic!("Expected named export"),
+            },
+            _ => panic!("Expected export statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_declaration() {
+        let result = parse_statement("class Foo {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(_) => {}
+            _ => panic!("Expected class declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_extends() {
+        let result = parse_statement("class Foo extends Bar {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.extends.is_some());
+            }
+            _ => panic!("Expected class with extends"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_implements() {
+        let result = parse_statement("class Foo implements Bar, Baz {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.implements.len(), 2);
+            }
+            _ => panic!("Expected class with implements"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_members() {
+        let result = parse_statement("class Foo { x: number = 0 }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with members"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_method() {
+        let result = parse_statement("class Foo { method(): number { return 42 } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with method"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_constructor() {
+        let result = parse_statement("class Foo { constructor() { } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with constructor"),
+        }
+    }
+
+    #[test]
+    fn test_parse_abstract_class() {
+        let result = parse_statement("abstract class Foo {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.is_abstract);
+            }
+            _ => panic!("Expected abstract class"),
+        }
+    }
+
+    #[test]
+    fn test_parse_final_class() {
+        let result = parse_statement("final class Foo {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.is_final);
+            }
+            _ => panic!("Expected final class"),
+        }
+    }
+
+    #[test]
+    fn test_parse_throw_statement() {
+        let result = parse_statement("throw error");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Throw(_) => {}
+            _ => panic!("Expected throw statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rethrow_statement() {
+        let result = parse_statement("rethrow");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Rethrow(_) => {}
+            _ => panic!("Expected rethrow statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_try_statement() {
+        let result = parse_statement("try end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(_) => {}
+            _ => panic!("Expected try statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_try_catch() {
+        let result = parse_statement("try end catch (e) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(try_stmt) => {
+                assert_eq!(try_stmt.catch_clauses.len(), 1);
+            }
+            _ => panic!("Expected try-catch statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_try_catch_finally() {
+        let result = parse_statement("try end catch (e) end finally end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(try_stmt) => {
+                assert_eq!(try_stmt.catch_clauses.len(), 1);
+                assert!(try_stmt.finally_block.is_some());
+            }
+            _ => panic!("Expected try-catch-finally statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_namespace_declaration() {
+        let result = parse_program("namespace Foo;");
+        assert!(result.is_ok());
+        let program = result.unwrap();
+        assert_eq!(program.statements.len(), 1);
+        match &program.statements[0] {
+            Statement::Namespace(_) => {}
+            _ => panic!("Expected namespace declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_namespace_with_path() {
+        let result = parse_program("namespace Foo.Bar.Baz;");
+        assert!(result.is_ok());
+        let program = result.unwrap();
+        match &program.statements[0] {
+            Statement::Namespace(ns) => {
+                assert_eq!(ns.path.len(), 3);
+            }
+            _ => panic!("Expected namespace with path"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_function() {
+        let result = parse_statement("declare function foo(): void");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareFunction(_) => {}
+            _ => panic!("Expected declare function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_const() {
+        let result = parse_statement("declare const FOO: number");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareConst(_) => {}
+            _ => panic!("Expected declare const"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expression_statement() {
+        let result = parse_statement("foo()");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Expression(_) => {}
+            _ => panic!("Expected expression statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_throws() {
+        let result = parse_statement("function foo() throws Error end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(func) => {
+                assert!(func.throws.is_some());
+            }
+            _ => panic!("Expected function with throws"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_type_params() {
+        let result = parse_statement("function foo<T>(x: T): T return x end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(func) => {
+                assert!(func.type_parameters.is_some());
+            }
+            _ => panic!("Expected function with type params"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_with_type_params() {
+        let result = parse_statement("interface Container<T> {}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert!(iface.type_parameters.is_some());
+            }
+            _ => panic!("Expected interface with type params"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_with_methods() {
+        let result = parse_statement("interface Foo { method(): number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert_eq!(iface.members.len(), 1);
+            }
+            _ => panic!("Expected interface with methods"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_with_index_signature() {
+        let result = parse_statement("interface Foo { [key: string]: number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert_eq!(iface.members.len(), 1);
+            }
+            _ => panic!("Expected interface with index signature"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_primary_constructor() {
+        let result = parse_statement("class Foo(x: number) { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.primary_constructor.is_some());
+            }
+            _ => panic!("Expected class with primary constructor"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_parent_constructor_args() {
+        let result = parse_statement("class Foo extends Bar(1, 2) { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.extends.is_some());
+                assert!(cls.parent_constructor_args.is_some());
+            }
+            _ => panic!("Expected class with parent constructor args"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_getter() {
+        let result = parse_statement("class Foo { get value(): number { return 42 } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with getter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_setter() {
+        let result = parse_statement("class Foo { set value(v: number) { } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with setter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_operator() {
+        let result = parse_statement("class Foo { operator + (other: Foo): Foo { return self } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with operator"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_access_modifiers() {
+        // Test each access modifier separately
+        let result = parse_statement("class Foo { public x: number }");
+        assert!(result.is_ok());
+
+        let result = parse_statement("class Foo { private x: number }");
+        assert!(result.is_ok());
+
+        let result = parse_statement("class Foo { protected x: number }");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_class_with_readonly() {
+        let result = parse_statement("class Foo { readonly x: number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with readonly member"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_abstract_method() {
+        let result = parse_statement("abstract class Foo { abstract method(): number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.is_abstract);
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with abstract method"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_override() {
+        let result = parse_statement("class Foo { override method(): number { return 42 } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with override"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_decorator() {
+        let result = parse_statement("class Foo { @decorator method(): void { } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with decorator"),
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_with_constructor() {
+        let result = parse_statement("enum Foo { constructor() { } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert!(enm.constructor.is_some());
+            }
+            _ => panic!("Expected enum with constructor"),
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_with_method() {
+        let result = parse_statement("enum Foo { function method(): number { return 42 } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert_eq!(enm.methods.len(), 1);
+            }
+            _ => panic!("Expected enum with method"),
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_with_field() {
+        let result = parse_statement("enum Foo { x: number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert_eq!(enm.fields.len(), 1);
+            }
+            _ => panic!("Expected enum with field"),
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_implements() {
+        let result = parse_statement("enum Foo implements Bar, Baz { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert_eq!(enm.implements.len(), 2);
+            }
+            _ => panic!("Expected enum with implements"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import_with_alias() {
+        let result = parse_statement("import { foo as bar } from 'module'");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Import(imp) => match imp.clause {
+                ImportClause::Named(specs) => {
+                    assert_eq!(specs.len(), 1);
+                    assert!(specs[0].local.is_some());
+                }
+                _ => panic!("Expected named import with alias"),
+            },
+            _ => panic!("Expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_import_type_only() {
+        let result = parse_statement("import type { Foo } from 'module'");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Import(imp) => match imp.clause {
+                ImportClause::TypeOnly(_) => {}
+                _ => panic!("Expected type-only import"),
+            },
+            _ => panic!("Expected import statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_declaration() {
+        let result = parse_statement("export function foo() end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Export(exp) => match exp.kind {
+                ExportKind::Declaration(_) => {}
+                _ => panic!("Expected export declaration"),
+            },
+            _ => panic!("Expected export statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_with_alias() {
+        let result = parse_statement("export { foo as bar }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Export(exp) => match exp.kind {
+                ExportKind::Named { specifiers, .. } => {
+                    assert_eq!(specifiers.len(), 1);
+                    assert!(specifiers[0].exported.is_some());
+                }
+                _ => panic!("Expected export with alias"),
+            },
+            _ => panic!("Expected export statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_export_from() {
+        let result = parse_statement("export { foo } from 'module'");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Export(exp) => match exp.kind {
+                ExportKind::Named { source, .. } => {
+                    assert!(source.is_some());
+                }
+                _ => panic!("Expected export from"),
+            },
+            _ => panic!("Expected export statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_namespace() {
+        let result = parse_statement("declare namespace Foo { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareNamespace(_) => {}
+            _ => panic!("Expected declare namespace"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_type() {
+        let result = parse_statement("declare type Foo = number");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareType(_) => {}
+            _ => panic!("Expected declare type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_interface() {
+        let result = parse_statement("declare interface Foo { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareInterface(_) => {}
+            _ => panic!("Expected declare interface"),
+        }
+    }
+
+    #[test]
+    fn test_parse_try_catch_with_type() {
+        let result = parse_statement("try end catch (e: Error) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(try_stmt) => {
+                assert_eq!(try_stmt.catch_clauses.len(), 1);
+            }
+            _ => panic!("Expected try-catch with type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_try_catch_with_union_type() {
+        let result = parse_statement("try end catch (e: Error | OtherError) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(try_stmt) => {
+                assert_eq!(try_stmt.catch_clauses.len(), 1);
+            }
+            _ => panic!("Expected try-catch with union type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_catch_clauses() {
+        let result = parse_statement("try end catch (e: Error) end catch (e: OtherError) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(try_stmt) => {
+                assert_eq!(try_stmt.catch_clauses.len(), 2);
+            }
+            _ => panic!("Expected multiple catch clauses"),
+        }
+    }
+
+    #[test]
+    fn test_parse_try_with_braces() {
+        let result = parse_statement("try { } catch (e) { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(_) => {}
+            _ => panic!("Expected try with braces"),
+        }
+    }
+
+    #[test]
+    fn test_parse_catch_with_braces() {
+        let result = parse_statement("try { } catch (e) { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Try(_) => {}
+            _ => panic!("Expected catch with braces"),
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_program() {
+        let source = r#"
+            local x: number = 42
+            function foo(a: number): number
+                return a * 2
+            end
+            if x > 0 then
+                print("positive")
+            end
+        "#;
+        let result = parse_program(source);
+        assert!(result.is_ok());
+        let program = result.unwrap();
+        assert_eq!(program.statements.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_interface_with_readonly() {
+        let result = parse_statement("interface Foo { readonly x: number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert_eq!(iface.members.len(), 1);
+            }
+            _ => panic!("Expected interface with readonly"),
+        }
+    }
+
+    #[test]
+    fn test_parse_interface_with_optional() {
+        let result = parse_statement("interface Foo { x?: number }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Interface(iface) => {
+                assert_eq!(iface.members.len(), 1);
+            }
+            _ => panic!("Expected interface with optional"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_with_final_method() {
+        let result = parse_statement("class Foo { final method(): void { } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+            }
+            _ => panic!("Expected class with final method"),
+        }
+    }
+
+    #[test]
+    fn test_parse_enum_member_with_arguments() {
+        let result = parse_statement("enum Foo { Bar(1, 2, 3) }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Enum(enm) => {
+                assert_eq!(enm.members.len(), 1);
+            }
+            _ => panic!("Expected enum with member arguments"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_return() {
+        let result = parse_statement("return");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Return(ret) => {
+                assert!(ret.values.is_empty());
+            }
+            _ => panic!("Expected empty return"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_default_param() {
+        let result = parse_statement("function foo(x: number = 42) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(func) => {
+                assert_eq!(func.parameters.len(), 1);
+            }
+            _ => panic!("Expected function with default param"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_rest_param() {
+        let result = parse_statement("function foo(...args) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(func) => {
+                assert_eq!(func.parameters.len(), 1);
+            }
+            _ => panic!("Expected function with rest param"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_with_optional_param() {
+        let result = parse_statement("function foo(x?: number) end");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Function(func) => {
+                assert_eq!(func.parameters.len(), 1);
+            }
+            _ => panic!("Expected function with optional param"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_function_with_throws() {
+        let result = parse_statement("declare function foo(): void throws Error");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareFunction(func) => {
+                assert!(func.throws.is_some());
+            }
+            _ => panic!("Expected declare function with throws"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_function_exported() {
+        let result = parse_statement("declare namespace Foo { export function bar(): void }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::DeclareNamespace(ns) => {
+                assert_eq!(ns.members.len(), 1);
+            }
+            _ => panic!("Expected declare namespace with exported function"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_decorator() {
+        let result = parse_statement("@decorator class Foo { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.decorators.len(), 1);
+            }
+            _ => panic!("Expected class with decorator"),
+        }
+    }
+
+    #[test]
+    fn test_parse_decorator_with_args() {
+        let result = parse_statement("@decorator(1, 2) class Foo { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.decorators.len(), 1);
+            }
+            _ => panic!("Expected class with decorated args"),
+        }
+    }
+
+    #[test]
+    fn test_parse_decorator_chain() {
+        let result = parse_statement("@foo @bar class Foo { }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.decorators.len(), 2);
+            }
+            _ => panic!("Expected class with decorator chain"),
+        }
     }
 }

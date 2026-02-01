@@ -112,6 +112,7 @@ pub struct ConstructorDeclaration {
 /// Example: `class Point(public x: number, private readonly y: number)`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConstructorParameter {
+    pub decorators: Vec<Decorator>,
     pub access: Option<AccessModifier>,
     pub is_readonly: bool,
     pub name: Ident,
@@ -268,6 +269,7 @@ pub struct EnumDeclaration {
     pub fields: Vec<EnumField>,
     pub constructor: Option<EnumConstructor>,
     pub methods: Vec<EnumMethod>,
+    pub implements: Vec<Type>,
     pub span: Span,
 }
 
@@ -321,6 +323,10 @@ pub enum ImportClause {
     Named(Vec<ImportSpecifier>),
     Namespace(Ident),
     TypeOnly(Vec<ImportSpecifier>),
+    Mixed {
+        default: Ident,
+        named: Vec<ImportSpecifier>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

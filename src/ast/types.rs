@@ -56,6 +56,7 @@ pub enum PrimitiveType {
     Void,
     Table,
     Coroutine,
+    Thread,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

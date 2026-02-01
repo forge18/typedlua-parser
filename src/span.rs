@@ -18,6 +18,7 @@ pub struct Span {
 
 impl Span {
     /// Create a new span
+    #[inline]
     pub fn new(start: u32, end: u32, line: u32, column: u32) -> Self {
         Self {
             start,
@@ -28,6 +29,7 @@ impl Span {
     }
 
     /// Create a dummy span for testing or generated code
+    #[inline]
     pub fn dummy() -> Self {
         Self {
             start: 0,
@@ -38,16 +40,19 @@ impl Span {
     }
 
     /// Get the length of the span
+    #[inline(always)]
     pub fn len(&self) -> u32 {
         self.end - self.start
     }
 
     /// Check if the span is empty
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
 
     /// Merge two spans into one that covers both
+    #[inline]
     pub fn merge(&self, other: &Span) -> Span {
         Span {
             start: self.start.min(other.start),
@@ -58,6 +63,7 @@ impl Span {
     }
 
     /// Alias for merge - combines two spans into one
+    #[inline]
     pub fn combine(&self, other: &Span) -> Span {
         self.merge(other)
     }
