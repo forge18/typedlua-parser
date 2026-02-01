@@ -1,2 +1,18 @@
-# Claude Code documentation (auto-generated)
+/target/
+**/*.rs.bk
+Cargo.lock
+.DS_Store
 CLAUDE.md
+**/CLAUDE.md
+*.pdb
+*.iobj
+*.ilk
+*.exe
+*.dll
+*.lib
+*.dmp
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
