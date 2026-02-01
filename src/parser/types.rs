@@ -455,10 +455,18 @@ impl Parser<'_> {
         self.consume(TokenKind::RightParen, "Expected ')' after tuple type")?;
         let end_span = self.current_span();
 
-        Ok(Type {
-            kind: TypeKind::Tuple(types),
-            span: start_span.combine(&end_span),
-        })
+        // If there's only one type and no comma, it's a parenthesized type, not a tuple
+        if types.len() == 1 {
+            Ok(Type {
+                kind: TypeKind::Parenthesized(Box::new(types.into_iter().next().unwrap())),
+                span: start_span.combine(&end_span),
+            })
+        } else {
+            Ok(Type {
+                kind: TypeKind::Tuple(types),
+                span: start_span.combine(&end_span),
+            })
+        }
     }
 
     pub(crate) fn parse_type_arguments(&mut self) -> Result<Vec<Type>, ParserError> {
