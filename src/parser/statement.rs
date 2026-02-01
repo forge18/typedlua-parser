@@ -1393,10 +1393,17 @@ impl Parser<'_> {
         let is_override = self.match_token(&[TokenKind::Override]);
         let is_readonly = self.match_token(&[TokenKind::Readonly]);
 
-        if self.check(&TokenKind::Get) {
+        // Disambiguate getter/setter syntax from methods named "get"/"set":
+        // `get propName(): T { ... }` is a getter (get followed by identifier)
+        // `get(): T { ... }` is a method named "get" (get followed by `(` or `<`)
+        if self.check(&TokenKind::Get)
+            && matches!(self.nth_token_kind(1), Some(TokenKind::Identifier(_)))
+        {
             return self.parse_getter(decorators, access, is_static);
         }
-        if self.check(&TokenKind::Set) {
+        if self.check(&TokenKind::Set)
+            && matches!(self.nth_token_kind(1), Some(TokenKind::Identifier(_)))
+        {
             return self.parse_setter(decorators, access, is_static);
         }
 
@@ -1409,7 +1416,20 @@ impl Parser<'_> {
         }
 
         let start_span = self.current_span();
-        let name = self.parse_identifier()?;
+        // Accept `get`/`set` as member names when they aren't acting as getter/setter keywords
+        let name = if self.check(&TokenKind::Get) || self.check(&TokenKind::Set) {
+            let keyword_str = if self.check(&TokenKind::Get) {
+                "get"
+            } else {
+                "set"
+            };
+            let span = self.current_span();
+            let id = self.interner.intern(keyword_str);
+            self.advance();
+            Spanned::new(id, span)
+        } else {
+            self.parse_identifier()?
+        };
 
         if self.check(&TokenKind::Colon) {
             // Property
@@ -3495,6 +3515,100 @@ mod tests {
                 assert_eq!(cls.decorators.len(), 2);
             }
             _ => panic!("Expected class with decorator chain"),
+        }
+    }
+
+    #[test]
+    fn test_parse_generic_class() {
+        let result = parse_statement("class Box<T> {}");
+        assert!(
+            result.is_ok(),
+            "Generic class should parse: {:?}",
+            result.err()
+        );
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.type_parameters.is_some());
+                assert_eq!(cls.type_parameters.unwrap().len(), 1);
+            }
+            other => panic!("Expected class, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_generic_class_with_field() {
+        let result = parse_statement("class Box<T> { private value: T }");
+        assert!(
+            result.is_ok(),
+            "Generic class with field should parse: {:?}",
+            result.err()
+        );
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.type_parameters.is_some());
+                assert_eq!(cls.members.len(), 1);
+            }
+            other => panic!("Expected class, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_generic_class_with_method() {
+        let result =
+            parse_statement("class Box<T> { getValue(): T { return self.value } }");
+        assert!(
+            result.is_ok(),
+            "Generic class with method should parse: {:?}",
+            result.err()
+        );
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert!(cls.type_parameters.is_some());
+                assert_eq!(cls.members.len(), 1);
+            }
+            other => panic!("Expected class, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_get_as_method_name() {
+        // "get" followed by "(" should be a method named "get", not a getter
+        let result = parse_statement("class Foo { get(): number { return 0 } }");
+        assert!(
+            result.is_ok(),
+            "get() as method name should parse: {:?}",
+            result.err()
+        );
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+                match &cls.members[0] {
+                    ClassMember::Method(_) => {}
+                    other => panic!("Expected method, got {:?}", other),
+                }
+            }
+            other => panic!("Expected class, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_get_as_getter() {
+        // "get" followed by identifier should still be a getter
+        let result = parse_statement("class Foo { get value(): number { return 0 } }");
+        assert!(
+            result.is_ok(),
+            "get as getter should parse: {:?}",
+            result.err()
+        );
+        match result.unwrap() {
+            Statement::Class(cls) => {
+                assert_eq!(cls.members.len(), 1);
+                match &cls.members[0] {
+                    ClassMember::Getter(_) => {}
+                    other => panic!("Expected getter, got {:?}", other),
+                }
+            }
+            other => panic!("Expected class, got {:?}", other),
         }
     }
 }
