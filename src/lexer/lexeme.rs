@@ -381,6 +381,7 @@ impl TokenKind {
                 _ => None,
             },
             10 => match s {
+                "implements" => Some(TokenKind::Implements),
                 "instanceof" => Some(TokenKind::Instanceof),
                 _ => None,
             },
