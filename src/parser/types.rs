@@ -263,6 +263,21 @@ impl Parser<'_> {
                 })
             }
 
+            // Template literal type: `hello ${T}`
+            TokenKind::TemplateString(parts) => {
+                self.advance();
+                let parts_clone = parts.clone();
+                let template_parts = self.parse_template_literal_type_parts(parts_clone)?;
+                let end_span = self.current_span();
+                Ok(Type {
+                    kind: TypeKind::TemplateLiteral(TemplateLiteralType {
+                        parts: template_parts,
+                        span: start_span.combine(&end_span),
+                    }),
+                    span: start_span.combine(&end_span),
+                })
+            }
+
             // Object type: { ... }
             TokenKind::LeftBrace => self.parse_object_type(),
 
@@ -493,6 +508,32 @@ impl Parser<'_> {
             }),
             span: start_span.combine(&end_span),
         })
+    }
+
+    fn parse_template_literal_type_parts(
+        &mut self,
+        lexer_parts: Vec<crate::lexer::TemplatePart>,
+    ) -> Result<Vec<TemplateLiteralTypePart>, ParserError> {
+        use crate::ast::types::TemplateLiteralTypePart;
+
+        let mut parts = Vec::new();
+
+        for lexer_part in lexer_parts {
+            match lexer_part {
+                crate::lexer::TemplatePart::String(s) => {
+                    parts.push(TemplateLiteralTypePart::String(s));
+                }
+                crate::lexer::TemplatePart::Expression(tokens) => {
+                    // Parse the expression as a type
+                    let handler = self.diagnostic_handler.clone();
+                    let mut temp_parser = Parser::new(tokens, handler, self.interner, self.common);
+                    let typ = temp_parser.parse_type()?;
+                    parts.push(TemplateLiteralTypePart::Type(typ));
+                }
+            }
+        }
+
+        Ok(parts)
     }
 
     fn parse_tuple_type(&mut self) -> Result<Type, ParserError> {
@@ -1386,6 +1427,61 @@ mod tests {
                 assert_eq!(mapped.optional_modifier, MappedTypeModifier::Add);
             }
             _ => panic!("Expected mapped type with modifiers"),
+        }
+    }
+
+    #[test]
+    fn test_parse_template_literal_type_basic() {
+        let result = parse_type("`hello`");
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::TemplateLiteral(template) => {
+                assert_eq!(template.parts.len(), 1);
+                match &template.parts[0] {
+                    TemplateLiteralTypePart::String(s) => assert_eq!(s, "hello"),
+                    _ => panic!("Expected string part"),
+                }
+            }
+            _ => panic!("Expected template literal type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_template_literal_type_with_type() {
+        let result = parse_type("`prefix_${T}`");
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e.message);
+        }
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::TemplateLiteral(template) => {
+                assert_eq!(template.parts.len(), 2);
+                match &template.parts[0] {
+                    TemplateLiteralTypePart::String(s) => assert_eq!(s, "prefix_"),
+                    _ => panic!("Expected string part"),
+                }
+                match &template.parts[1] {
+                    TemplateLiteralTypePart::Type(_) => {}
+                    _ => panic!("Expected type part"),
+                }
+            }
+            _ => panic!("Expected template literal type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_template_literal_type_complex() {
+        let result = parse_type("`${T}_${U}`");
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e.message);
+        }
+        assert!(result.is_ok());
+        match result.unwrap().kind {
+            TypeKind::TemplateLiteral(template) => {
+                assert_eq!(template.parts.len(), 3);
+                // T, _, U
+            }
+            _ => panic!("Expected template literal type"),
         }
     }
 }
