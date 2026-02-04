@@ -936,8 +936,12 @@ impl Parser<'_> {
                     ast_parts.push(crate::ast::expression::TemplatePart::String(s));
                 }
                 crate::lexer::TemplatePart::Expression(tokens) => {
-                    let handler = self.diagnostic_handler.clone();
-                    let mut temp_parser = Parser::new(tokens, handler, self.interner, self.common);
+                    let mut temp_parser = Parser::new(
+                        tokens,
+                        self.diagnostic_handler.clone(),
+                        self.interner,
+                        self.common,
+                    );
                     let expr = temp_parser.parse_expression()?;
                     ast_parts.push(crate::ast::expression::TemplatePart::Expression(Box::new(
                         expr,

@@ -13,6 +13,7 @@ pub trait StatementParser {
 }
 
 impl StatementParser for Parser<'_> {
+    #[inline]
     fn parse_statement(&mut self) -> Result<Statement, ParserError> {
         // Check for decorators first
         if self.check(&TokenKind::At) {
@@ -60,11 +61,11 @@ impl StatementParser for Parser<'_> {
         }
     }
 
+    #[inline]
     fn parse_block(&mut self) -> Result<Block, ParserError> {
         let start_span = self.current_span();
-        let mut statements = Vec::new();
+        let mut statements = Vec::with_capacity(4);
 
-        // Blocks in Lua don't require braces in many contexts
         while !self.is_at_end()
             && !matches!(
                 &self.current().kind,
@@ -160,6 +161,7 @@ impl Parser<'_> {
         }))
     }
 
+    #[inline]
     fn parse_variable_declaration(&mut self) -> Result<Statement, ParserError> {
         let start_span = self.current_span();
         let kind = if matches!(self.current().kind, TokenKind::Const) {

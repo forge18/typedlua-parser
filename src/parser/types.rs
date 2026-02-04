@@ -11,17 +11,15 @@ pub trait TypeParser {
 }
 
 impl TypeParser for Parser<'_> {
+    #[inline]
     fn parse_type(&mut self) -> Result<Type, ParserError> {
-        // Check for type predicate: identifier is Type
         if matches!(&self.current().kind, TokenKind::Identifier(_)) {
             let checkpoint = self.position;
             let start_span = self.current_span();
 
-            // Try to parse identifier
             if let Ok(param_name) = self.parse_identifier() {
-                // Check if next token is 'is'
                 if self.check(&TokenKind::Is) {
-                    self.advance(); // consume 'is'
+                    self.advance();
                     let type_annotation = Box::new(self.parse_union_type()?);
                     let end_span = type_annotation.span;
                     return Ok(Type {
@@ -35,7 +33,6 @@ impl TypeParser for Parser<'_> {
                 }
             }
 
-            // Not a type predicate, rewind and parse as normal type
             self.position = checkpoint;
         }
 
@@ -44,6 +41,7 @@ impl TypeParser for Parser<'_> {
 }
 
 impl Parser<'_> {
+    #[inline]
     fn parse_union_type(&mut self) -> Result<Type, ParserError> {
         let mut types = vec![self.parse_intersection_type()?];
 
@@ -63,6 +61,7 @@ impl Parser<'_> {
         }
     }
 
+    #[inline]
     fn parse_intersection_type(&mut self) -> Result<Type, ParserError> {
         let mut types = vec![self.parse_conditional_type()?];
 
@@ -82,6 +81,7 @@ impl Parser<'_> {
         }
     }
 
+    #[inline]
     fn parse_conditional_type(&mut self) -> Result<Type, ParserError> {
         let check_type = self.parse_postfix_type()?;
 
@@ -113,6 +113,7 @@ impl Parser<'_> {
         Ok(check_type)
     }
 
+    #[inline]
     fn parse_postfix_type(&mut self) -> Result<Type, ParserError> {
         let mut ty = self.parse_primary_type()?;
 
@@ -157,6 +158,7 @@ impl Parser<'_> {
         Ok(ty)
     }
 
+    #[inline]
     fn parse_primary_type(&mut self) -> Result<Type, ParserError> {
         let start_span = self.current_span();
 
