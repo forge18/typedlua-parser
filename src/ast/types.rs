@@ -56,6 +56,7 @@ pub enum PrimitiveType {
     Void,
     Table,
     Coroutine,
+    Thread,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,12 +97,19 @@ pub struct ConditionalType {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MappedTypeModifier {
+    Add,    // +readonly, +? (or just readonly, ?)
+    Remove, // -readonly, -?
+    None,   // no modifier
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappedType {
-    pub is_readonly: bool,
+    pub readonly_modifier: MappedTypeModifier,
     pub type_parameter: Box<TypeParameter>,
     pub in_type: Box<Type>,
-    pub is_optional: bool,
+    pub optional_modifier: MappedTypeModifier,
     pub value_type: Box<Type>,
     pub span: Span,
 }

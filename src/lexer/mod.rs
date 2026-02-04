@@ -668,6 +668,13 @@ mod tests {
         (lexer.tokenize().unwrap(), interner)
     }
 
+    fn lex_with_handler(source: &str) -> (Vec<Token>, Arc<CollectingDiagnosticHandler>) {
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let interner = StringInterner::new();
+        let mut lexer = Lexer::new(source, handler.clone(), &interner);
+        (lexer.tokenize().unwrap(), handler)
+    }
+
     #[test]
     fn test_keywords() {
         let tokens = lex("const local function return if then else end");
@@ -861,5 +868,436 @@ mod tests {
         assert_eq!(tokens[0].span.column, 1);
         assert_eq!(tokens[1].span.line, 2);
         assert_eq!(tokens[1].span.column, 1);
+    }
+
+    #[test]
+    fn test_unterminated_string() {
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let interner = StringInterner::new();
+        let mut lexer = Lexer::new("\"hello", handler.clone(), &interner);
+        // Should fail with unterminated string error
+        let result = lexer.tokenize();
+        assert!(result.is_err() || handler.has_errors());
+    }
+
+    #[test]
+    fn test_unterminated_multi_line_comment() {
+        let (_, handler) = lex_with_handler("--[[ unterminated comment");
+        assert!(handler.has_errors());
+    }
+
+    #[test]
+    fn test_escape_sequences() {
+        let tokens = lex("\"hello\\nworld\\ttab\\rreturn\\\\backslash\\\"quote\\'apos\\0null\"");
+        if let TokenKind::String(s) = &tokens[0].kind {
+            assert!(s.contains('\n'));
+            assert!(s.contains('\t'));
+            assert!(s.contains('\r'));
+            assert!(s.contains('\\'));
+            assert!(s.contains('"'));
+            assert!(s.contains('\''));
+            assert!(s.contains('\0'));
+        } else {
+            panic!("Expected String token");
+        }
+    }
+
+    #[test]
+    fn test_unknown_escape_sequence() {
+        let tokens = lex("\"hello\\zworld\"");
+        if let TokenKind::String(s) = &tokens[0].kind {
+            // Unknown escape sequences should be preserved as-is
+            assert!(s.contains('z'));
+        } else {
+            panic!("Expected String token");
+        }
+    }
+
+    #[test]
+    fn test_template_string_empty_expression() {
+        let tokens = lex("`${}`");
+        assert!(matches!(&tokens[0].kind, TokenKind::TemplateString(_)));
+    }
+
+    #[test]
+    fn test_template_string_complex() {
+        let tokens = lex("`Result: ${a + b} and ${foo()} end`");
+        assert!(matches!(&tokens[0].kind, TokenKind::TemplateString(_)));
+    }
+
+    #[test]
+    fn test_all_keywords() {
+        let keywords = [
+            ("and", TokenKind::And),
+            ("break", TokenKind::Break),
+            ("const", TokenKind::Const),
+            ("continue", TokenKind::Continue),
+            ("do", TokenKind::Do),
+            ("else", TokenKind::Else),
+            ("elseif", TokenKind::Elseif),
+            ("end", TokenKind::End),
+            ("enum", TokenKind::Enum),
+            ("export", TokenKind::Export),
+            ("false", TokenKind::False),
+            ("final", TokenKind::Final),
+            ("for", TokenKind::For),
+            ("function", TokenKind::Function),
+            ("if", TokenKind::If),
+            ("import", TokenKind::Import),
+            ("in", TokenKind::In),
+            ("interface", TokenKind::Interface),
+            ("local", TokenKind::Local),
+            ("match", TokenKind::Match),
+            ("namespace", TokenKind::Namespace),
+            ("new", TokenKind::New),
+            ("nil", TokenKind::Nil),
+            ("not", TokenKind::Not),
+            ("or", TokenKind::Or),
+            ("readonly", TokenKind::Readonly),
+            ("repeat", TokenKind::Repeat),
+            ("rethrow", TokenKind::Rethrow),
+            ("return", TokenKind::Return),
+            ("super", TokenKind::Super),
+            ("then", TokenKind::Then),
+            ("throw", TokenKind::Throw),
+            ("true", TokenKind::True),
+            ("try", TokenKind::Try),
+            ("type", TokenKind::Type),
+            ("until", TokenKind::Until),
+            ("while", TokenKind::While),
+        ];
+
+        for (kw, expected) in keywords.iter() {
+            let tokens = lex(kw);
+            assert_eq!(
+                tokens[0].kind, *expected,
+                "Keyword '{}' should produce {:?}",
+                kw, expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_hex_numbers() {
+        let tokens = lex("0xFF 0x0 0xABC");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(s) if s == "0xFF"));
+        assert!(matches!(&tokens[1].kind, TokenKind::Number(s) if s == "0x0"));
+        assert!(matches!(&tokens[2].kind, TokenKind::Number(s) if s == "0xABC"));
+    }
+
+    #[test]
+    fn test_binary_numbers() {
+        let tokens = lex("0b1010 0b0 0b1111");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(s) if s == "0b1010"));
+        assert!(matches!(&tokens[1].kind, TokenKind::Number(s) if s == "0b0"));
+        assert!(matches!(&tokens[2].kind, TokenKind::Number(s) if s == "0b1111"));
+    }
+
+    #[test]
+    fn test_scientific_notation() {
+        let tokens = lex("1e10 1.5e-3 2E+5");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(s) if s == "1e10"));
+        assert!(matches!(&tokens[1].kind, TokenKind::Number(s) if s == "1.5e-3"));
+        assert!(matches!(&tokens[2].kind, TokenKind::Number(s) if s == "2E+5"));
+    }
+
+    #[test]
+    fn test_compound_assignment() {
+        let tokens = lex("+= -= *= /= %= ^= ..=");
+        assert_eq!(tokens[0].kind, TokenKind::PlusEqual);
+        assert_eq!(tokens[1].kind, TokenKind::MinusEqual);
+        assert_eq!(tokens[2].kind, TokenKind::StarEqual);
+        assert_eq!(tokens[3].kind, TokenKind::SlashEqual);
+        assert_eq!(tokens[4].kind, TokenKind::PercentEqual);
+        assert_eq!(tokens[5].kind, TokenKind::CaretEqual);
+        assert_eq!(tokens[6].kind, TokenKind::DotDotEqual);
+    }
+
+    #[test]
+    fn test_shift_operators() {
+        let tokens = lex("<< >>");
+        assert_eq!(tokens[0].kind, TokenKind::LessLess);
+        assert_eq!(tokens[1].kind, TokenKind::GreaterGreater);
+    }
+
+    #[test]
+    fn test_floor_divide() {
+        let tokens = lex("//");
+        assert_eq!(tokens[0].kind, TokenKind::SlashSlash);
+    }
+
+    #[test]
+    fn test_concatenate() {
+        let tokens = lex("..");
+        assert_eq!(tokens[0].kind, TokenKind::DotDot);
+    }
+
+    #[test]
+    fn test_variadic() {
+        let tokens = lex("...");
+        assert_eq!(tokens[0].kind, TokenKind::DotDotDot);
+    }
+
+    #[test]
+    fn test_colon_colon() {
+        let tokens = lex("::");
+        assert_eq!(tokens[0].kind, TokenKind::ColonColon);
+    }
+
+    #[test]
+    fn test_question_dot() {
+        let tokens = lex("?.");
+        assert_eq!(tokens[0].kind, TokenKind::QuestionDot);
+    }
+
+    #[test]
+    fn test_bang_bang() {
+        let tokens = lex("!!");
+        assert_eq!(tokens[0].kind, TokenKind::BangBang);
+    }
+
+    #[test]
+    fn test_null_coalesce() {
+        let tokens = lex("??");
+        assert_eq!(tokens[0].kind, TokenKind::QuestionQuestion);
+    }
+
+    #[test]
+    fn test_pipe() {
+        let tokens = lex("|");
+        assert_eq!(tokens[0].kind, TokenKind::Pipe);
+    }
+
+    #[test]
+    fn test_question() {
+        let tokens = lex("?");
+        assert_eq!(tokens[0].kind, TokenKind::Question);
+    }
+
+    #[test]
+    fn test_at() {
+        let tokens = lex("@");
+        assert_eq!(tokens[0].kind, TokenKind::At);
+    }
+
+    #[test]
+    fn test_is_keyword() {
+        let tokens = lex("is");
+        assert_eq!(tokens[0].kind, TokenKind::Is);
+    }
+
+    #[test]
+    fn test_extends_keyword() {
+        let tokens = lex("extends");
+        assert_eq!(tokens[0].kind, TokenKind::Extends);
+    }
+
+    #[test]
+    fn test_implements_keyword() {
+        let tokens = lex("implements");
+        assert_eq!(tokens[0].kind, TokenKind::Implements);
+    }
+
+    #[test]
+    fn test_abstract_keyword() {
+        let tokens = lex("abstract");
+        assert_eq!(tokens[0].kind, TokenKind::Abstract);
+    }
+
+    #[test]
+    fn test_class_keyword() {
+        let tokens = lex("class");
+        assert_eq!(tokens[0].kind, TokenKind::Class);
+    }
+
+    #[test]
+    fn test_constructor_keyword() {
+        let tokens = lex("constructor");
+        assert_eq!(tokens[0].kind, TokenKind::Constructor);
+    }
+
+    #[test]
+    fn test_declare_keyword() {
+        let tokens = lex("declare");
+        assert_eq!(tokens[0].kind, TokenKind::Declare);
+    }
+
+    #[test]
+    fn test_from_keyword() {
+        let tokens = lex("from");
+        assert_eq!(tokens[0].kind, TokenKind::From);
+    }
+
+    #[test]
+    fn test_get_keyword() {
+        let tokens = lex("get");
+        assert_eq!(tokens[0].kind, TokenKind::Get);
+    }
+
+    #[test]
+    fn test_instanceof_keyword() {
+        let tokens = lex("instanceof");
+        assert_eq!(tokens[0].kind, TokenKind::Instanceof);
+    }
+
+    #[test]
+    fn test_operator_keyword() {
+        let tokens = lex("operator");
+        assert_eq!(tokens[0].kind, TokenKind::Operator);
+    }
+
+    #[test]
+    fn test_override_keyword() {
+        let tokens = lex("override");
+        assert_eq!(tokens[0].kind, TokenKind::Override);
+    }
+
+    #[test]
+    fn test_private_keyword() {
+        let tokens = lex("private");
+        assert_eq!(tokens[0].kind, TokenKind::Private);
+    }
+
+    #[test]
+    fn test_protected_keyword() {
+        let tokens = lex("protected");
+        assert_eq!(tokens[0].kind, TokenKind::Protected);
+    }
+
+    #[test]
+    fn test_public_keyword() {
+        let tokens = lex("public");
+        assert_eq!(tokens[0].kind, TokenKind::Public);
+    }
+
+    #[test]
+    fn test_set_keyword() {
+        let tokens = lex("set");
+        assert_eq!(tokens[0].kind, TokenKind::Set);
+    }
+
+    #[test]
+    fn test_static_keyword() {
+        let tokens = lex("static");
+        assert_eq!(tokens[0].kind, TokenKind::Static);
+    }
+
+    #[test]
+    fn test_throws_keyword() {
+        let tokens = lex("throws");
+        assert_eq!(tokens[0].kind, TokenKind::Throws);
+    }
+
+    #[test]
+    fn test_catch_keyword() {
+        let tokens = lex("catch");
+        assert_eq!(tokens[0].kind, TokenKind::Catch);
+    }
+
+    #[test]
+    fn test_finally_keyword() {
+        let tokens = lex("finally");
+        assert_eq!(tokens[0].kind, TokenKind::Finally);
+    }
+
+    #[test]
+    fn test_as_keyword() {
+        let tokens = lex("as");
+        assert_eq!(tokens[0].kind, TokenKind::As);
+    }
+
+    #[test]
+    fn test_comment_at_end() {
+        let tokens = lex("const x = 5 -- comment at end");
+        assert_eq!(tokens[0].kind, TokenKind::Const);
+    }
+
+    #[test]
+    fn test_empty_source() {
+        let tokens = lex("");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_whitespace_only() {
+        let tokens = lex("   \n\t  ");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_single_char_tokens() {
+        let tokens = lex("= ( ) { } [ ] , ; : . + - * / % ^ # & | ~ < > ! @ ?");
+        assert_eq!(tokens[0].kind, TokenKind::Equal);
+        assert_eq!(tokens[1].kind, TokenKind::LeftParen);
+        assert_eq!(tokens[2].kind, TokenKind::RightParen);
+        assert_eq!(tokens[3].kind, TokenKind::LeftBrace);
+        assert_eq!(tokens[4].kind, TokenKind::RightBrace);
+        assert_eq!(tokens[5].kind, TokenKind::LeftBracket);
+        assert_eq!(tokens[6].kind, TokenKind::RightBracket);
+        assert_eq!(tokens[7].kind, TokenKind::Comma);
+        assert_eq!(tokens[8].kind, TokenKind::Semicolon);
+        assert_eq!(tokens[9].kind, TokenKind::Colon);
+        assert_eq!(tokens[10].kind, TokenKind::Dot);
+        assert_eq!(tokens[11].kind, TokenKind::Plus);
+        assert_eq!(tokens[12].kind, TokenKind::Minus);
+        assert_eq!(tokens[13].kind, TokenKind::Star);
+        assert_eq!(tokens[14].kind, TokenKind::Slash);
+        assert_eq!(tokens[15].kind, TokenKind::Percent);
+        assert_eq!(tokens[16].kind, TokenKind::Caret);
+        assert_eq!(tokens[17].kind, TokenKind::Hash);
+        assert_eq!(tokens[18].kind, TokenKind::Ampersand);
+        assert_eq!(tokens[19].kind, TokenKind::Pipe);
+        assert_eq!(tokens[20].kind, TokenKind::Tilde);
+        assert_eq!(tokens[21].kind, TokenKind::LessThan);
+        assert_eq!(tokens[22].kind, TokenKind::GreaterThan);
+        assert_eq!(tokens[23].kind, TokenKind::Bang);
+        assert_eq!(tokens[24].kind, TokenKind::At);
+        assert_eq!(tokens[25].kind, TokenKind::Question);
+    }
+
+    #[test]
+    fn test_invalid_character() {
+        let (_, handler) = lex_with_handler("$");
+        // Invalid characters should be reported but tokenization continues
+        assert!(handler.has_errors() || handler.get_diagnostics().len() > 0);
+    }
+
+    #[test]
+    fn test_identifier_with_numbers() {
+        let (tokens, interner) = lex_with_interner("abc123 _test x1_y2");
+        assert_eq!(tokens.len(), 4); // 3 identifiers + EOF
+        if let TokenKind::Identifier(id) = tokens[0].kind {
+            assert_eq!(interner.resolve(id), "abc123");
+        }
+        if let TokenKind::Identifier(id) = tokens[1].kind {
+            assert_eq!(interner.resolve(id), "_test");
+        }
+        if let TokenKind::Identifier(id) = tokens[2].kind {
+            assert_eq!(interner.resolve(id), "x1_y2");
+        }
+    }
+
+    #[test]
+    fn test_negative_numbers() {
+        let tokens = lex("-5 -10.5");
+        assert_eq!(tokens[0].kind, TokenKind::Minus);
+        assert!(matches!(&tokens[1].kind, TokenKind::Number(s) if s == "5"));
+        assert_eq!(tokens[2].kind, TokenKind::Minus);
+        assert!(matches!(&tokens[3].kind, TokenKind::Number(s) if s == "10.5"));
+    }
+
+    #[test]
+    fn test_adjacent_operators() {
+        let tokens = lex("a+b*c");
+        assert_eq!(tokens.len(), 6); // a + b * c EOF
+    }
+
+    #[test]
+    fn test_deeply_nested_parens() {
+        let tokens = lex("((((x))))");
+        // 4 open parens + x + 4 close parens + EOF = 10 tokens
+        assert_eq!(tokens.len(), 10);
     }
 }

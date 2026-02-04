@@ -54,7 +54,7 @@ pub enum ExpressionKind {
     SuperKeyword,
     Template(TemplateLiteral),
     TypeAssertion(Box<Expression>, Type),
-    New(Box<Expression>, Vec<Argument>),
+    New(Box<Expression>, Vec<Argument>, Option<Vec<Type>>),
     OptionalMember(Box<Expression>, Ident),
     OptionalIndex(Box<Expression>, Box<Expression>),
     OptionalCall(Box<Expression>, Vec<Argument>, Option<Vec<Type>>),

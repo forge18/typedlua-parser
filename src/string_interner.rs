@@ -137,6 +137,25 @@ impl StringInterner {
         f(&strings[id.0 as usize])
     }
 
+    /// Export the string table for serialization.
+    /// Returns the ordered list of interned strings so StringId indices remain valid.
+    pub fn to_strings(&self) -> Vec<String> {
+        self.id_to_string.borrow().clone()
+    }
+
+    /// Reconstruct an interner from a previously exported string table.
+    /// StringId values from the original interner will resolve to the same strings.
+    pub fn from_strings(strings: Vec<String>) -> Self {
+        let mut string_to_id = FxHashMap::default();
+        for (i, s) in strings.iter().enumerate() {
+            string_to_id.insert(s.clone(), StringId(i as u32));
+        }
+        StringInterner {
+            string_to_id: RefCell::new(string_to_id),
+            id_to_string: RefCell::new(strings),
+        }
+    }
+
     /// Get the number of unique strings interned
     pub fn len(&self) -> usize {
         self.id_to_string.borrow().len()
@@ -173,12 +192,14 @@ impl StringInterner {
 
 impl StringId {
     /// Get the raw u32 value of this ID
+    #[inline(always)]
     pub fn as_u32(self) -> u32 {
         self.0
     }
 
     /// Create a StringId from a raw u32 value
     /// This is unchecked and doesn't validate the ID exists in the interner
+    #[inline(always)]
     pub fn from_u32(id: u32) -> Self {
         Self(id)
     }
@@ -224,7 +245,7 @@ mod tests {
     fn test_intern_many_unique() {
         let interner = StringInterner::new();
 
-        let strings = vec!["foo", "bar", "baz", "qux", "test", "hello", "world"];
+        let strings = ["foo", "bar", "baz", "qux", "test", "hello", "world"];
         let ids: Vec<_> = strings.iter().map(|s| interner.intern(s)).collect();
 
         for i in 0..ids.len() {

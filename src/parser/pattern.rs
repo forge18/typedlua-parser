@@ -10,6 +10,35 @@ pub trait PatternParser {
 
 impl PatternParser for Parser<'_> {
     fn parse_pattern(&mut self) -> Result<Pattern, ParserError> {
+        self.parse_or_pattern()
+    }
+}
+
+impl Parser<'_> {
+    fn parse_or_pattern(&mut self) -> Result<Pattern, ParserError> {
+        let mut alternatives = vec![self.parse_primary_pattern()?];
+
+        // Keep consuming | tokens while in pattern context
+        while self.check(&TokenKind::Pipe) {
+            self.advance();
+            alternatives.push(self.parse_primary_pattern()?);
+        }
+
+        if alternatives.len() == 1 {
+            // Single alternative - not an or-pattern
+            Ok(alternatives.into_iter().next().unwrap())
+        } else {
+            // Multiple alternatives - create or-pattern
+            let span = alternatives
+                .first()
+                .unwrap()
+                .span()
+                .combine(&alternatives.last().unwrap().span());
+            Ok(Pattern::Or(OrPattern { alternatives, span }))
+        }
+    }
+
+    fn parse_primary_pattern(&mut self) -> Result<Pattern, ParserError> {
         let start_span = self.current_span();
 
         match &self.current().kind.clone() {
@@ -21,6 +50,31 @@ impl PatternParser for Parser<'_> {
                 let id = *name;
                 self.advance();
                 Ok(Pattern::Identifier(Spanned::new(id, start_span)))
+            }
+            // Boolean literals must be checked before the general keyword check
+            TokenKind::True => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Boolean(true), start_span))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Pattern::Literal(Literal::Boolean(false), start_span))
+            }
+            // Allow keywords as identifiers in patterns (for function type parameters)
+            kind if kind.is_keyword() => {
+                if let Some(s) = kind.to_keyword_str() {
+                    let id = self.interner.intern(s);
+                    self.advance();
+                    Ok(Pattern::Identifier(Spanned::new(id, start_span)))
+                } else {
+                    Err(ParserError {
+                        message: format!(
+                            "Internal error: keyword {:?} missing string representation",
+                            kind
+                        ),
+                        span: start_span,
+                    })
+                }
             }
             TokenKind::Number(s) => {
                 let num = s.parse::<f64>().map_err(|_| ParserError {
@@ -35,20 +89,17 @@ impl PatternParser for Parser<'_> {
                 self.advance();
                 Ok(Pattern::Literal(Literal::String(string), start_span))
             }
-            TokenKind::True => {
-                self.advance();
-                Ok(Pattern::Literal(Literal::Boolean(true), start_span))
-            }
-            TokenKind::False => {
-                self.advance();
-                Ok(Pattern::Literal(Literal::Boolean(false), start_span))
-            }
             TokenKind::Nil => {
                 self.advance();
                 Ok(Pattern::Literal(Literal::Nil, start_span))
             }
             TokenKind::LeftBracket => self.parse_array_pattern(),
             TokenKind::LeftBrace => self.parse_object_pattern(),
+            TokenKind::DotDotDot => {
+                // Variadic parameter: ...
+                self.advance();
+                Ok(Pattern::Wildcard(start_span))
+            }
             _ => Err(ParserError {
                 message: format!("Unexpected token in pattern: {:?}", self.current().kind),
                 span: start_span,
@@ -173,5 +224,353 @@ impl Parser<'_> {
             properties,
             span: start_span.combine(&end_span),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::CollectingDiagnosticHandler;
+    use crate::lexer::Lexer;
+    use crate::span::Span;
+    use crate::string_interner::StringInterner;
+    use std::sync::Arc;
+
+    fn parse_pattern(source: &str) -> Result<Pattern, ParserError> {
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let mut lexer = Lexer::new(source, handler.clone(), &interner);
+        let tokens = lexer.tokenize().map_err(|e| ParserError {
+            message: format!("Lexer error: {:?}", e),
+            span: Span::default(),
+        })?;
+        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        parser.parse_pattern()
+    }
+
+    #[test]
+    fn test_parse_identifier_pattern() {
+        let result = parse_pattern("x");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Identifier(_) => {}
+            _ => panic!("Expected identifier pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_wildcard_pattern() {
+        let result = parse_pattern("_");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Wildcard(_) => {}
+            _ => panic!("Expected wildcard pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_true_pattern() {
+        let result = parse_pattern("true");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Literal(Literal::Boolean(true), _) => {}
+            _ => panic!("Expected true literal pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_false_pattern() {
+        let result = parse_pattern("false");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Literal(Literal::Boolean(false), _) => {}
+            _ => panic!("Expected false literal pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_nil_pattern() {
+        let result = parse_pattern("nil");
+        assert!(result.is_ok());
+        // nil is parsed as a keyword identifier in patterns
+        match result.unwrap() {
+            Pattern::Identifier(_) => {}
+            _ => panic!("Expected identifier pattern for nil keyword"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_number_pattern() {
+        let result = parse_pattern("42");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Literal(Literal::Number(n), _) => assert_eq!(n, 42.0),
+            _ => panic!("Expected number literal pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_literal_string_pattern() {
+        let result = parse_pattern("\"hello\"");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Literal(Literal::String(s), _) => assert_eq!(s, "hello"),
+            _ => panic!("Expected string literal pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_pattern() {
+        let result = parse_pattern("[a, b, c]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert_eq!(arr.elements.len(), 3);
+            }
+            _ => panic!("Expected array pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_pattern_with_rest() {
+        let result = parse_pattern("[first, ...rest]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert_eq!(arr.elements.len(), 2);
+                match &arr.elements[1] {
+                    ArrayPatternElement::Rest(_) => {}
+                    _ => panic!("Expected rest element"),
+                }
+            }
+            _ => panic!("Expected array pattern with rest"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_pattern_with_hole() {
+        let result = parse_pattern("[a, , b]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert_eq!(arr.elements.len(), 3);
+                match &arr.elements[1] {
+                    ArrayPatternElement::Hole => {}
+                    _ => panic!("Expected hole element"),
+                }
+            }
+            _ => panic!("Expected array pattern with hole"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_array_pattern() {
+        let result = parse_pattern("[]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert!(arr.elements.is_empty());
+            }
+            _ => panic!("Expected empty array pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_pattern() {
+        let result = parse_pattern("{ x, y, z }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 3);
+            }
+            _ => panic!("Expected object pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_pattern_with_alias() {
+        let result = parse_pattern("{ x: newX }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 1);
+                assert!(obj.properties[0].value.is_some());
+            }
+            _ => panic!("Expected object pattern with alias"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_pattern_with_default() {
+        let result = parse_pattern("{ x = 42 }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 1);
+                assert!(obj.properties[0].default.is_some());
+            }
+            _ => panic!("Expected object pattern with default"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_pattern_with_alias_and_default() {
+        let result = parse_pattern("{ x: newX = 42 }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 1);
+                assert!(obj.properties[0].value.is_some());
+                assert!(obj.properties[0].default.is_some());
+            }
+            _ => panic!("Expected object pattern with alias and default"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_object_pattern() {
+        let result = parse_pattern("{}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert!(obj.properties.is_empty());
+            }
+            _ => panic!("Expected empty object pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_or_pattern() {
+        let result = parse_pattern("A | B");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Or(or) => {
+                assert_eq!(or.alternatives.len(), 2);
+            }
+            _ => panic!("Expected or pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_or_pattern_multiple() {
+        let result = parse_pattern("A | B | C");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Or(or) => {
+                assert_eq!(or.alternatives.len(), 3);
+            }
+            _ => panic!("Expected or pattern with multiple alternatives"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_array_pattern() {
+        let result = parse_pattern("[[a, b], c]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert_eq!(arr.elements.len(), 2);
+            }
+            _ => panic!("Expected nested array pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_object_pattern() {
+        let result = parse_pattern("{ x: { y } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 1);
+                assert!(obj.properties[0].value.is_some());
+            }
+            _ => panic!("Expected nested object pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_variadic_pattern() {
+        let result = parse_pattern("...");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Wildcard(_) => {}
+            _ => panic!("Expected wildcard pattern for variadic"),
+        }
+    }
+
+    #[test]
+    fn test_parse_keyword_as_identifier() {
+        // Keywords should be allowed as identifiers in patterns
+        let result = parse_pattern("type");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Identifier(_) => {}
+            _ => panic!("Expected keyword as identifier pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_pattern() {
+        let result = parse_pattern("{ x: [a, b], y: { z } }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 2);
+            }
+            _ => panic!("Expected complex pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_pattern_single_element() {
+        let result = parse_pattern("[x]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert_eq!(arr.elements.len(), 1);
+            }
+            _ => panic!("Expected single element array pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_object_pattern_single_property() {
+        let result = parse_pattern("{ x }");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Object(obj) => {
+                assert_eq!(obj.properties.len(), 1);
+            }
+            _ => panic!("Expected single property object pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_or_pattern_with_literals() {
+        let result = parse_pattern("1 | 2 | 3");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Or(or) => {
+                assert_eq!(or.alternatives.len(), 3);
+            }
+            _ => panic!("Expected or pattern with literals"),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_pattern_with_only_rest() {
+        // Test array pattern with just rest element
+        let result = parse_pattern("[...rest]");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Pattern::Array(arr) => {
+                assert_eq!(arr.elements.len(), 1);
+                match &arr.elements[0] {
+                    ArrayPatternElement::Rest(_) => {}
+                    _ => panic!("Expected rest element"),
+                }
+            }
+            _ => panic!("Expected array pattern with rest"),
+        }
     }
 }

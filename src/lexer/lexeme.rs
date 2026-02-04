@@ -20,6 +20,7 @@ pub enum TokenKind {
     In,
     Break,
     Continue,
+    Goto,
     Repeat,
     Until,
     And,
@@ -53,6 +54,7 @@ pub enum TokenKind {
     Infer,
     Is,
     Instanceof,
+    Typeof,
     Declare,
     Namespace,
     Constructor,
@@ -184,6 +186,7 @@ impl TokenKind {
                 | TokenKind::In
                 | TokenKind::Break
                 | TokenKind::Continue
+                | TokenKind::Goto
                 | TokenKind::Repeat
                 | TokenKind::Until
                 | TokenKind::And
@@ -217,6 +220,7 @@ impl TokenKind {
                 | TokenKind::Infer
                 | TokenKind::Is
                 | TokenKind::Instanceof
+                | TokenKind::Typeof
                 | TokenKind::Declare
                 | TokenKind::Namespace
                 | TokenKind::Constructor
@@ -243,6 +247,7 @@ impl TokenKind {
             TokenKind::In => Some("in"),
             TokenKind::Break => Some("break"),
             TokenKind::Continue => Some("continue"),
+            TokenKind::Goto => Some("goto"),
             TokenKind::Repeat => Some("repeat"),
             TokenKind::Until => Some("until"),
             TokenKind::And => Some("and"),
@@ -276,6 +281,7 @@ impl TokenKind {
             TokenKind::Infer => Some("infer"),
             TokenKind::Is => Some("is"),
             TokenKind::Instanceof => Some("instanceof"),
+            TokenKind::Typeof => Some("typeof"),
             TokenKind::Declare => Some("declare"),
             TokenKind::Namespace => Some("namespace"),
             TokenKind::Constructor => Some("constructor"),
@@ -319,6 +325,7 @@ impl TokenKind {
                 "from" => Some(TokenKind::From),
                 "when" => Some(TokenKind::When),
                 "true" => Some(TokenKind::True),
+                "goto" => Some(TokenKind::Goto),
                 _ => None,
             },
             5 => match s {
@@ -347,6 +354,7 @@ impl TokenKind {
                 "public" => Some(TokenKind::Public),
                 "static" => Some(TokenKind::Static),
                 "throws" => Some(TokenKind::Throws),
+                "typeof" => Some(TokenKind::Typeof),
                 _ => None,
             },
             7 => match s {
