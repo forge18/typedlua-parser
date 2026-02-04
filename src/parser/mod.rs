@@ -181,7 +181,8 @@ impl<'a> Parser<'a> {
             error_codes::UNEXPECTED_TOKEN
         };
 
-        self.diagnostic_handler.report_error(span, error_code, message);
+        self.diagnostic_handler
+            .report_error(span, error_code, message);
     }
 
     // Error recovery: skip to next statement boundary

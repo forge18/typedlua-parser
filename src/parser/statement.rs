@@ -1909,20 +1909,18 @@ impl Parser<'_> {
         let span = self.current_span();
         let name = match &self.current().kind {
             TokenKind::Identifier(name) => *name,
-            kind if kind.is_keyword() => {
-                match kind.to_keyword_str() {
-                    Some(s) => self.interner.intern(s),
-                    None => {
-                        return Err(ParserError {
-                            message: format!(
-                                "Internal error: keyword {:?} missing string representation",
-                                kind
-                            ),
-                            span,
-                        });
-                    }
+            kind if kind.is_keyword() => match kind.to_keyword_str() {
+                Some(s) => self.interner.intern(s),
+                None => {
+                    return Err(ParserError {
+                        message: format!(
+                            "Internal error: keyword {:?} missing string representation",
+                            kind
+                        ),
+                        span,
+                    });
                 }
-            }
+            },
             _ => {
                 return Err(ParserError {
                     message: format!(
