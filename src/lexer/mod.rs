@@ -640,20 +640,31 @@ impl<'a> Lexer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::CollectingDiagnosticHandler;
+    use crate::di::{DiContainer, ServiceLifetime};
+    use crate::diagnostics::{CollectingDiagnosticHandler, DiagnosticHandler};
     use crate::string_interner::StringInterner;
 
     fn lex(source: &str) -> Vec<Token> {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let diagnostic_handler = container.resolve::<Arc<dyn DiagnosticHandler>>().unwrap();
         let interner = StringInterner::new();
-        let mut lexer = Lexer::new(source, handler, &interner);
+        let mut lexer = Lexer::new(source, diagnostic_handler, &interner);
         lexer.tokenize().unwrap()
     }
 
     fn lex_with_interner(source: &str) -> (Vec<Token>, StringInterner) {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let diagnostic_handler = container.resolve::<Arc<dyn DiagnosticHandler>>().unwrap();
         let interner = StringInterner::new();
-        let mut lexer = Lexer::new(source, handler, &interner);
+        let mut lexer = Lexer::new(source, diagnostic_handler, &interner);
         (lexer.tokenize().unwrap(), interner)
     }
 
@@ -704,7 +715,7 @@ mod tests {
     fn test_template_strings() {
         let tokens = lex("`hello ${name} world`");
 
-        assert!(matches!(&tokens[0].kind, TokenKind::TemplateString(_)));
+        assert!(matches!(tokens[0].kind, TokenKind::TemplateString(_)));
         if let TokenKind::TemplateString(parts) = &tokens[0].kind {
             assert_eq!(parts.len(), 3);
             assert!(matches!(&parts[0], TemplatePart::String(s) if s == "hello "));

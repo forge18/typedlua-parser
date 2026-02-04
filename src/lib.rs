@@ -17,6 +17,7 @@
 //!
 //! ```
 //! use typedlua_parser::prelude::*;
+//! use typedlua_parser::{DiContainer, ServiceLifetime};
 //! use std::sync::Arc;
 //!
 //! let source = r#"
@@ -26,7 +27,13 @@
 //!     end
 //! "#;
 //!
-//! let handler = Arc::new(CollectingDiagnosticHandler::new());
+//! let mut container = DiContainer::new();
+//! container.register(
+//!     |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+//!     ServiceLifetime::Transient,
+//! );
+//!
+//! let handler = container.resolve::<Arc<dyn DiagnosticHandler>>().unwrap();
 //! let (interner, common) = StringInterner::new_with_common_identifiers();
 //! let mut lexer = Lexer::new(source, handler.clone(), &interner);
 //! let tokens = lexer.tokenize().unwrap();
@@ -124,36 +131,6 @@ pub fn parse_with_container(
     parser.parse()
 }
 
-/// Parse source code into an AST
-///
-/// This is a convenience function that handles lexing and parsing in one call.
-///
-/// # Example
-///
-/// ```
-/// use typedlua_parser::{parse, CollectingDiagnosticHandler};
-/// use std::sync::Arc;
-///
-/// let source = "const x: number = 42";
-/// let handler = Arc::new(CollectingDiagnosticHandler::new());
-///
-/// match parse(source, handler) {
-///     Ok(program) => println!("Parsed {} statements", program.statements.len()),
-///     Err(e) => eprintln!("Parse error: {}", e),
-/// }
-/// ```
-pub fn parse(
-    source: &str,
-    diagnostic_handler: Arc<dyn DiagnosticHandler>,
-) -> Result<Program, ParserError> {
-    let mut container = DiContainer::new();
-    container.register(
-        move |_| diagnostic_handler.clone(),
-        ServiceLifetime::Transient,
-    );
-    parse_with_container(source, &mut container)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,8 +139,12 @@ mod tests {
     #[test]
     fn test_parse_simple() {
         let source = "const x: number = 42";
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let result = parse(source, handler);
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let result = parse_with_container(source, &mut container);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().statements.len(), 1);
     }
@@ -175,8 +156,12 @@ mod tests {
                 return "Hello, " .. name
             end
         "#;
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let result = parse(source, handler);
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let result = parse_with_container(source, &mut container);
         assert!(result.is_ok());
     }
 
@@ -188,8 +173,12 @@ mod tests {
                 y: number
             }
         "#;
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let result = parse(source, handler);
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let result = parse_with_container(source, &mut container);
         assert!(result.is_ok());
     }
 
@@ -205,15 +194,24 @@ mod tests {
                 }
             }
         "#;
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let result = parse(source, handler);
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let result = parse_with_container(source, &mut container);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_lexer_basic() {
         let source = "const x = 42";
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let mut container = DiContainer::new();
+        container.register(
+            |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Transient,
+        );
+        let handler = container.resolve::<Arc<dyn DiagnosticHandler>>().unwrap();
         let interner = StringInterner::new();
         let mut lexer = Lexer::new(source, handler, &interner);
         let tokens = lexer.tokenize().unwrap();
@@ -283,5 +281,115 @@ mod tests {
         assert!(handler1.is_some());
         assert!(handler2.is_some());
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_di_container_dependent_services() {
+        trait StringProvider: Send + Sync {
+            fn get_string(&self) -> String;
+        }
+
+        struct StaticStringProvider;
+
+        impl StringProvider for StaticStringProvider {
+            fn get_string(&self) -> String {
+                "static".to_string()
+            }
+        }
+
+        trait StringConsumer: Send + Sync {
+            fn consume(&self) -> String;
+        }
+
+        struct StringConsumerImpl {
+            provider: Arc<dyn StringProvider>,
+        }
+
+        impl StringConsumer for StringConsumerImpl {
+            fn consume(&self) -> String {
+                format!("consumed: {}", self.provider.get_string())
+            }
+        }
+
+        let mut container = DiContainer::new();
+        container.register::<Arc<dyn StringProvider>>(
+            |_| Arc::new(StaticStringProvider) as Arc<dyn StringProvider>,
+            ServiceLifetime::Singleton,
+        );
+        container.register::<Arc<dyn StringConsumer>>(
+            |container| {
+                let provider = container.resolve::<Arc<dyn StringProvider>>().unwrap();
+                Arc::new(StringConsumerImpl { provider }) as Arc<dyn StringConsumer>
+            },
+            ServiceLifetime::Singleton,
+        );
+
+        let consumer = container.resolve::<Arc<dyn StringConsumer>>();
+        assert!(consumer.is_some());
+        assert_eq!(consumer.unwrap().consume(), "consumed: static");
+    }
+
+    #[test]
+    fn test_di_container_wrapping_non_clone() {
+        use crate::diagnostics::DiagnosticHandler;
+
+        struct NonCloneHandler {
+            data: String,
+        }
+
+        impl DiagnosticHandler for NonCloneHandler {
+            fn report(&self, _diagnostic: crate::diagnostics::Diagnostic) {}
+            fn has_errors(&self) -> bool {
+                false
+            }
+            fn error_count(&self) -> usize {
+                0
+            }
+            fn warning_count(&self) -> usize {
+                0
+            }
+            fn get_diagnostics(&self) -> Vec<crate::diagnostics::Diagnostic> {
+                Vec::new()
+            }
+        }
+
+        let mut container = DiContainer::new();
+        let handler_ptr = Arc::new(NonCloneHandler {
+            data: "test".to_string(),
+        });
+        container.register(
+            move |_| handler_ptr.clone() as Arc<dyn DiagnosticHandler>,
+            ServiceLifetime::Singleton,
+        );
+
+        let resolved = container.resolve::<Arc<dyn DiagnosticHandler>>();
+        assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn test_di_container_lifecycle() {
+        let mut container = DiContainer::new();
+        assert!(!container.is_registered::<String>());
+        assert_eq!(container.service_count(), 0);
+        assert_eq!(container.singleton_count(), 0);
+
+        container.register::<String>(|_| "test".to_string(), ServiceLifetime::Singleton);
+
+        assert!(container.is_registered::<String>());
+        assert_eq!(container.service_count(), 1);
+        assert_eq!(container.singleton_count(), 0);
+
+        let _ = container.resolve::<String>();
+        assert_eq!(container.singleton_count(), 1);
+
+        let _ = container.resolve::<String>();
+        assert_eq!(container.singleton_count(), 1);
+    }
+
+    #[test]
+    fn test_di_container_unregistered_type() {
+        let mut container = DiContainer::new();
+        let result = container.resolve::<String>();
+        assert!(result.is_none());
     }
 }
