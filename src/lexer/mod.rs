@@ -423,41 +423,72 @@ impl<'a> Lexer<'a> {
     fn read_string(&mut self, quote: char) -> Result<TokenKind, LexerError> {
         self.advance(); // Skip opening quote
 
-        // Pre-allocate: most strings are < 32 chars
-        let mut string = String::with_capacity(32);
+        // Optimized: estimate string length by scanning ahead
+        let start_pos = self.position;
+        let mut end_pos = start_pos;
+        let mut has_escapes = false;
 
-        while !self.is_at_end() && self.current() != quote {
-            if self.current() == '\\' {
-                self.advance();
-                if self.is_at_end() {
+        // First pass: find string end and count escapes
+        while !self.is_at_end() && self.source[end_pos as usize] != quote {
+            if self.source[end_pos as usize] == '\\' {
+                has_escapes = true;
+                end_pos += 1; // Skip escape character
+                if end_pos >= self.source.len() as u32 {
                     return Err(LexerError::UnterminatedString);
                 }
-
-                let escaped = match self.current() {
-                    'n' => '\n',
-                    't' => '\t',
-                    'r' => '\r',
-                    '\\' => '\\',
-                    '\'' => '\'',
-                    '"' => '"',
-                    '0' => '\0',
-                    _ => self.current(),
-                };
-
-                string.push(escaped);
-                self.advance();
-            } else {
-                string.push(self.current());
-                self.advance();
             }
+            end_pos += 1;
         }
 
         if self.is_at_end() {
             return Err(LexerError::UnterminatedString);
         }
 
-        self.advance(); // Skip closing quote
-        Ok(TokenKind::String(string))
+        let string_len = end_pos - start_pos;
+
+        // Second pass: build string with precise allocation
+        if has_escapes {
+            // Fall back to original logic for strings with escapes
+            let mut string = String::with_capacity(string_len as usize);
+            let mut pos = start_pos;
+
+            while pos < end_pos {
+                if self.source[pos as usize] == '\\' {
+                    pos += 1;
+                    if pos >= end_pos {
+                        return Err(LexerError::UnterminatedString);
+                    }
+
+                    let escaped = match self.source[pos as usize] {
+                        'n' => '\n',
+                        't' => '\t',
+                        'r' => '\r',
+                        '\\' => '\\',
+                        '\'' => '\'',
+                        '"' => '"',
+                        '0' => '\0',
+                        _ => self.source[pos as usize],
+                    };
+                    string.push(escaped);
+                } else {
+                    string.push(self.source[pos as usize]);
+                }
+                pos += 1;
+            }
+
+            self.position = end_pos + 1; // Skip closing quote
+            self.column += string_len + 2; // +2 for quotes
+            Ok(TokenKind::String(string))
+        } else {
+            // Fast path: no escapes, direct slice conversion
+            let string = self.source[start_pos as usize..end_pos as usize]
+                .iter()
+                .collect::<String>();
+
+            self.position = end_pos + 1; // Skip closing quote
+            self.column += string_len + 2; // +2 for quotes
+            Ok(TokenKind::String(string))
+        }
     }
 
     fn read_template_string(&mut self) -> Result<Token, LexerError> {

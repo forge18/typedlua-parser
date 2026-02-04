@@ -169,7 +169,20 @@ impl Parser<'_> {
         };
         self.advance();
 
-        let pattern = self.parse_pattern()?;
+        // Fast path for simple identifier patterns (most common case)
+        let pattern = if matches!(self.current().kind, TokenKind::Identifier(_)) {
+            // Optimized path for simple identifiers
+            let ident_span = self.current_span();
+            let id = match &self.current().kind {
+                TokenKind::Identifier(id) => *id,
+                _ => unreachable!(),
+            };
+            self.advance();
+            Pattern::Identifier(Spanned::new(id, ident_span))
+        } else {
+            // Fall back to full pattern parsing for complex cases
+            self.parse_pattern()?
+        };
 
         let type_annotation = if self.match_token(&[TokenKind::Colon]) {
             Some(self.parse_type()?)
