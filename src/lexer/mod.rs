@@ -42,8 +42,7 @@ impl<'a> Lexer<'a> {
 
     /// Tokenize the entire source
     pub fn tokenize(&mut self) -> Result<Vec<Token>, LexerError> {
-        // Pre-allocate: estimate ~1 token per 5 characters
-        let estimated_tokens = self.source.len() / 5 + 10;
+        let estimated_tokens = (self.source.len() / 4).saturating_add(4);
         let mut tokens = Vec::with_capacity(estimated_tokens);
 
         while !self.is_at_end() {
@@ -52,7 +51,6 @@ impl<'a> Lexer<'a> {
                 break;
             }
 
-            // Try to skip comments
             if self.try_skip_comment() {
                 continue;
             }
@@ -62,6 +60,7 @@ impl<'a> Lexer<'a> {
         }
 
         tokens.push(Token::eof(self.position));
+        tokens.shrink_to_fit();
         Ok(tokens)
     }
 
@@ -429,7 +428,7 @@ impl<'a> Lexer<'a> {
         let mut has_escapes = false;
 
         // First pass: find string end and count escapes
-        while !self.is_at_end() && self.source[end_pos as usize] != quote {
+        while end_pos < self.source.len() as u32 && self.source[end_pos as usize] != quote {
             if self.source[end_pos as usize] == '\\' {
                 has_escapes = true;
                 end_pos += 1; // Skip escape character
@@ -440,7 +439,8 @@ impl<'a> Lexer<'a> {
             end_pos += 1;
         }
 
-        if self.is_at_end() {
+        // Check if we found the closing quote
+        if end_pos >= self.source.len() as u32 || self.source[end_pos as usize] != quote {
             return Err(LexerError::UnterminatedString);
         }
 

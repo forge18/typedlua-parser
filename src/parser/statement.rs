@@ -204,6 +204,7 @@ impl Parser<'_> {
         }))
     }
 
+    #[inline]
     fn parse_function_declaration(&mut self) -> Result<Statement, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Function, "Expected 'function'")?;
@@ -227,7 +228,7 @@ impl Parser<'_> {
         };
 
         let throws = if self.match_token(&[TokenKind::Throws]) {
-            let mut error_types = Vec::new();
+            let mut error_types = Vec::with_capacity(2);
 
             if self.check(&TokenKind::LeftParen) {
                 self.consume(TokenKind::LeftParen, "Expected '(' after 'throws'")?;
@@ -248,7 +249,6 @@ impl Parser<'_> {
             None
         };
 
-        // Support both brace-style { } and Lua-style ... end
         let use_braces = self.check(&TokenKind::LeftBrace);
         if use_braces {
             self.consume(TokenKind::LeftBrace, "Expected '{'")?;
@@ -2214,8 +2214,9 @@ impl Parser<'_> {
         Ok(params)
     }
 
+    #[inline]
     pub(super) fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParserError> {
-        let mut params = Vec::new();
+        let mut params = Vec::with_capacity(4);
 
         if self.check(&TokenKind::RightParen) {
             return Ok(params);
@@ -2225,8 +2226,6 @@ impl Parser<'_> {
             let param_start = self.current_span();
             let is_rest = self.match_token(&[TokenKind::DotDotDot]);
 
-            // If we have a rest parameter but no identifier (just `...`),
-            // create a wildcard pattern
             let pattern =
                 if is_rest && self.check(&TokenKind::RightParen) || self.check(&TokenKind::Comma) {
                     Pattern::Wildcard(param_start)

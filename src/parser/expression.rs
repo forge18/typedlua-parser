@@ -14,16 +14,14 @@ impl ExpressionParser for Parser<'_> {
 
 // Expression parsing using Pratt parsing for precedence
 impl Parser<'_> {
+    #[inline]
     fn parse_assignment(&mut self) -> Result<Expression, ParserError> {
-        // Check for arrow function: identifier => expr or (params) => expr
         let checkpoint = self.position;
 
-        // Try to parse as arrow function
         if let Ok(arrow) = self.try_parse_arrow_function() {
             return Ok(arrow);
         }
 
-        // Reset and parse normally
         self.position = checkpoint;
 
         let expr = self.parse_conditional()?;
@@ -172,6 +170,7 @@ impl Parser<'_> {
         })
     }
 
+    #[inline]
     fn parse_logical_or(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_null_coalesce()?;
 
@@ -188,6 +187,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_null_coalesce(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_logical_and()?;
 
@@ -208,6 +208,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_logical_and(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_bitwise_or()?;
 
@@ -224,6 +225,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_bitwise_or(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_bitwise_xor()?;
 
@@ -240,6 +242,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_bitwise_xor(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_bitwise_and()?;
 
@@ -256,6 +259,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_bitwise_and(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_equality()?;
 
@@ -272,6 +276,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_equality(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_comparison()?;
 
@@ -288,6 +293,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_comparison(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_concatenation()?;
 
@@ -304,6 +310,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_concatenation(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_shift()?;
 
@@ -324,6 +331,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_shift(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_additive()?;
 
@@ -340,6 +348,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_additive(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_multiplicative()?;
 
@@ -356,6 +365,7 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    #[inline]
     fn parse_multiplicative(&mut self) -> Result<Expression, ParserError> {
         let mut expr = self.parse_power()?;
 
@@ -684,19 +694,22 @@ impl Parser<'_> {
                     paren_count += 1;
                 }
 
-                let mut expr = self.parse_expression()?;
+                let expr = self.parse_expression()?;
 
                 for _ in 0..paren_count {
-                    let end_span = self.current_span();
                     self.consume(TokenKind::RightParen, "Expected ')' after expression")?;
-                    expr = Expression {
-                        kind: ExpressionKind::Parenthesized(Box::new(expr)),
+                }
+
+                let end_span = self.current_span();
+                let mut wrapped = expr;
+                for _ in 0..paren_count {
+                    wrapped = Expression {
+                        kind: ExpressionKind::Parenthesized(Box::new(wrapped)),
                         span: start_span.combine(&end_span),
                         ..Default::default()
                     };
                 }
-
-                Ok(expr)
+                Ok(wrapped)
             }
             TokenKind::LeftBrace => self.parse_object_or_table(),
             TokenKind::LeftBracket => self.parse_array(),
@@ -808,6 +821,7 @@ impl Parser<'_> {
         })
     }
 
+    #[inline]
     fn parse_function_expression(&mut self) -> Result<Expression, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Function, "Expected 'function'")?;
@@ -906,14 +920,15 @@ impl Parser<'_> {
         })
     }
 
+    #[inline]
     fn parse_template_literal(
         &mut self,
         lexer_parts: Vec<crate::lexer::TemplatePart>,
         start_span: crate::span::Span,
     ) -> Result<Expression, ParserError> {
-        self.advance(); // Consume the template string token
+        self.advance();
 
-        let mut ast_parts = Vec::new();
+        let mut ast_parts = Vec::with_capacity(lexer_parts.len());
 
         for lexer_part in lexer_parts {
             match lexer_part {
