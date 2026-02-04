@@ -152,6 +152,30 @@ pub fn bench_lexer(c: &mut Criterion, name: &str, input: String) {
     });
 }
 
+/// Benchmark parser on given input
+pub fn bench_parser(c: &mut Criterion, name: &str, input: String) {
+    let handler = Arc::new(NoOpDiagnosticHandler);
+    let (interner, common) = StringInterner::new_with_common_identifiers();
+
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let mut lexer = Lexer::new(
+                black_box(&input),
+                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                &interner,
+            );
+            let tokens = lexer.tokenize().unwrap_or_default();
+            let mut parser = Parser::new(
+                tokens,
+                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                &interner,
+                &common,
+            );
+            let _ = parser.parse();
+        })
+    });
+}
+
 /// Benchmark full parse (lex + parse) on given input
 pub fn bench_full(c: &mut Criterion, name: &str, input: String) {
     let handler = Arc::new(NoOpDiagnosticHandler);

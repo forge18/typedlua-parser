@@ -6,33 +6,33 @@ mod lib;
 use lib::*;
 
 pub fn full_benchmarks(c: &mut Criterion) {
-    // Small complete program
+    // Small realistic program (single module)
     let small_program = format!(
         "{}\n{}\n{}\n{}",
-        generate_variables(100),
-        generate_functions(50),
-        generate_classes(20),
-        generate_interfaces(20)
+        generate_variables(20),
+        generate_functions(5),
+        generate_classes(2),
+        generate_interfaces(2)
     );
     bench_full(c, "full/small_program", small_program);
 
-    // Medium complete program
+    // Medium realistic program (medium module)
     let medium_program = format!(
         "{}\n{}\n{}\n{}",
-        generate_variables(500),
-        generate_functions(200),
-        generate_classes(50),
-        generate_interfaces(50)
+        generate_variables(50),
+        generate_functions(10),
+        generate_classes(5),
+        generate_interfaces(5)
     );
     bench_full(c, "full/medium_program", medium_program);
 
-    // Large complete program
+    // Large realistic program (large module)
     let large_program = format!(
         "{}\n{}\n{}\n{}",
-        generate_variables(2000),
-        generate_functions(500),
-        generate_classes(100),
-        generate_interfaces(100)
+        generate_variables(100),
+        generate_functions(20),
+        generate_classes(10),
+        generate_interfaces(10)
     );
     bench_full(c, "full/large_program", large_program);
 

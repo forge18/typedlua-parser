@@ -1,8 +1,8 @@
 [default]
 sample_size = 10
-warm_up_time = 3
-measurement_time = 10
-nresamples = 10000
+warm_up_time = 0.1
+measurement_time = 0.5
+nresamples = 100
 confidence_level = 0.95
 noise_threshold = 0.05
 
