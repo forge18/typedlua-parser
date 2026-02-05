@@ -1,20 +1,17 @@
-use rustc_hash::FxHashMap;
+use lasso::{Rodeo, ThreadedRodeo};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 
-/// A string interner that deduplicates strings and assigns them unique IDs
+/// A unique identifier for an interned string
+/// Wraps lasso::Spur for compatibility with the existing API
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StringId(lasso::Spur);
+
+/// A thread-safe string interner that deduplicates strings and assigns them unique IDs
 /// This reduces memory usage when the same strings are used repeatedly (like identifiers)
 #[derive(Debug, Clone)]
 pub struct StringInterner {
-    /// Map from string to its ID (interior mutability for interning)
-    string_to_id: RefCell<FxHashMap<String, StringId>>,
-    /// Map from ID to string (interior mutability for interning)
-    id_to_string: RefCell<Vec<String>>,
+    rodeo: ThreadedRodeo,
 }
-
-/// A unique identifier for an interned string
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct StringId(u32);
 
 /// Pre-defined common identifiers used across the compiler
 #[derive(Debug, Clone, Copy)]
@@ -49,8 +46,7 @@ impl StringInterner {
     /// Create a new string interner
     pub fn new() -> Self {
         Self {
-            string_to_id: RefCell::new(FxHashMap::default()),
-            id_to_string: RefCell::new(Vec::new()),
+            rodeo: ThreadedRodeo::new(),
         }
     }
 }
@@ -97,35 +93,18 @@ impl StringInterner {
     /// Intern a string and return its ID
     /// If the string is already interned, returns the existing ID
     pub fn intern(&self, s: &str) -> StringId {
-        // Fast path: check if already interned (read-only)
-        if let Some(&id) = self.string_to_id.borrow().get(s) {
-            return id;
-        }
-
-        // Slow path: need to insert (write)
-        let mut id_to_string = self.id_to_string.borrow_mut();
-        let mut string_to_id = self.string_to_id.borrow_mut();
-
-        // Double-check after acquiring write lock
-        if let Some(&id) = string_to_id.get(s) {
-            return id;
-        }
-
-        let id = StringId(id_to_string.len() as u32);
-        id_to_string.push(s.to_string());
-        string_to_id.insert(s.to_string(), id);
-        id
+        StringId(self.rodeo.get_or_intern(s))
     }
 
     /// Get the string for a given ID
     /// Panics if the ID is invalid
     pub fn resolve(&self, id: StringId) -> String {
-        self.id_to_string.borrow()[id.0 as usize].clone()
+        self.rodeo.resolve(&id.0).to_string()
     }
 
     /// Get the string for a given ID, if it exists
     pub fn try_resolve(&self, id: StringId) -> Option<String> {
-        self.id_to_string.borrow().get(id.0 as usize).cloned()
+        self.rodeo.try_resolve(&id.0).map(|s| s.to_string())
     }
 
     /// Resolve with a callback to avoid allocation when possible
@@ -133,107 +112,66 @@ impl StringInterner {
     where
         F: FnOnce(&str) -> R,
     {
-        let strings = self.id_to_string.borrow();
-        f(&strings[id.0 as usize])
+        f(self.rodeo.resolve(&id.0))
     }
 
     /// Export the string table for serialization.
-    /// Returns the ordered list of interned strings so StringId indices remain valid.
+    /// Returns the ordered list of interned strings.
     pub fn to_strings(&self) -> Vec<String> {
-        self.id_to_string.borrow().clone()
+        self.rodeo.strings().map(|s| s.to_string()).collect()
     }
 
     /// Reconstruct an interner from a previously exported string table.
     /// StringId values from the original interner will resolve to the same strings.
     pub fn from_strings(strings: Vec<String>) -> Self {
-        let mut string_to_id = FxHashMap::default();
-        for (i, s) in strings.iter().enumerate() {
-            string_to_id.insert(s.clone(), StringId(i as u32));
+        let rodeo = ThreadedRodeo::new();
+        for s in strings {
+            rodeo.get_or_intern(s);
         }
-        StringInterner {
-            string_to_id: RefCell::new(string_to_id),
-            id_to_string: RefCell::new(strings),
-        }
+        Self { rodeo }
     }
 
     /// Get the number of unique strings interned
     pub fn len(&self) -> usize {
-        self.id_to_string.borrow().len()
+        self.rodeo.len()
     }
 
     /// Check if the interner is empty
     pub fn is_empty(&self) -> bool {
-        self.id_to_string.borrow().is_empty()
+        self.rodeo.is_empty()
     }
 
     /// Get or intern a string, returning its ID
-    /// Uses interior mutability for concurrent access
+    /// Thread-safe version for concurrent access
     pub fn get_or_intern(&self, s: &str) -> StringId {
-        // Fast path: check if already interned (read-only)
-        if let Some(&id) = self.string_to_id.borrow().get(s) {
-            return id;
-        }
-
-        // Slow path: need to insert (write)
-        let mut id_to_string = self.id_to_string.borrow_mut();
-        let mut string_to_id = self.string_to_id.borrow_mut();
-
-        // Double-check after acquiring write lock
-        if let Some(&id) = string_to_id.get(s) {
-            return id;
-        }
-
-        let id = StringId(id_to_string.len() as u32);
-        id_to_string.push(s.to_string());
-        string_to_id.insert(s.to_string(), id);
-        id
-    }
-
-    /// Merge strings from another interner into this one.
-    /// Returns a mapping from old StringIds (from other) to new StringIds (in self).
-    /// This is used for parallel parsing where each thread has its own interner.
-    pub fn merge_from(&mut self, other: &StringInterner) -> FxHashMap<StringId, StringId> {
-        let mut remap = FxHashMap::default();
-        let other_strings = other.id_to_string.borrow();
-
-        for (old_id, string) in other_strings.iter().enumerate() {
-            let old_id = StringId(old_id as u32);
-            // Check if this string already exists in self
-            if let Some(&existing_id) = self.string_to_id.borrow().get(string) {
-                remap.insert(old_id, existing_id);
-            } else {
-                // Insert the new string and get its ID
-                let new_id = StringId(self.id_to_string.borrow().len() as u32);
-                self.id_to_string.borrow_mut().push(string.clone());
-                self.string_to_id
-                    .borrow_mut()
-                    .insert(string.clone(), new_id);
-                remap.insert(old_id, new_id);
-            }
-        }
-
-        remap
+        self.intern(s)
     }
 }
 
 impl StringId {
+    /// Get the raw Spur value
+    #[inline(always)]
+    pub fn as_spur(self) -> lasso::Spur {
+        self.0
+    }
+
     /// Get the raw u32 value of this ID
     #[inline(always)]
     pub fn as_u32(self) -> u32 {
-        self.0
+        self.0.into()
     }
 
     /// Create a StringId from a raw u32 value
     /// This is unchecked and doesn't validate the ID exists in the interner
     #[inline(always)]
     pub fn from_u32(id: u32) -> Self {
-        Self(id)
+        Self(lasso::Spur::from_u32(id))
     }
 }
 
 impl std::fmt::Display for StringId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "StringId({})", self.0)
+        write!(f, "StringId({})", self.0.into_u32())
     }
 }
 
@@ -308,52 +246,67 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_from() {
-        // Create two separate interners (simulating per-thread interners)
-        let mut interner1 = StringInterner::new();
-        let mut interner2 = StringInterner::new();
+    fn test_serialization_roundtrip() {
+        let interner = StringInterner::new();
 
-        // Intern some strings in each
-        let id1_a = interner1.intern("hello");
-        let id1_b = interner1.intern("world");
-        let id2_a = interner2.intern("hello"); // Same string as in interner1
-        let id2_b = interner2.intern("foo");
-        let id2_c = interner2.intern("bar");
+        let id1 = interner.intern("hello");
+        let id2 = interner.intern("world");
+        let id3 = interner.intern("hello");
 
-        // Merge interner2 into interner1
-        let remap = interner1.merge_from(&interner2);
+        let strings = interner.to_strings();
 
-        // Check that the remap table has entries for all strings from interner2
-        assert_eq!(remap.len(), 3);
+        let restored = StringInterner::from_strings(strings);
 
-        // "hello" should map to the existing ID in interner1
-        assert_eq!(remap[&id2_a], id1_a);
-
-        // "foo" and "bar" should map to new IDs
-        let new_id_foo = remap[&id2_b];
-        let new_id_bar = remap[&id2_c];
-
-        // Verify the merged interner has all strings
-        assert_eq!(interner1.len(), 4); // hello, world, foo, bar
-        assert_eq!(interner1.resolve(id1_a), "hello");
-        assert_eq!(interner1.resolve(id1_b), "world");
-        assert_eq!(interner1.resolve(new_id_foo), "foo");
-        assert_eq!(interner1.resolve(new_id_bar), "bar");
+        // Same strings should resolve correctly
+        assert_eq!(restored.resolve(id1), "hello");
+        assert_eq!(restored.resolve(id2), "world");
+        assert_eq!(id1, id3);
     }
 
     #[test]
-    fn test_merge_from_empty() {
-        let mut interner1 = StringInterner::new();
-        let interner2 = StringInterner::new();
+    fn test_common_identifiers() {
+        let (interner, common) = StringInterner::new_with_common_identifiers();
 
-        // Add some strings to interner1 before merging
-        let id1 = interner1.intern("test");
+        assert_eq!(interner.resolve(common.nil), "nil");
+        assert_eq!(interner.resolve(common.true_), "true");
+        assert_eq!(interner.resolve(common.false_), "false");
+        assert_eq!(interner.resolve(common.function), "function");
+        assert_eq!(interner.resolve(common.local), "local");
+        assert_eq!(interner.resolve(common.const_), "const");
+        assert_eq!(interner.resolve(common.return_), "return");
+        assert_eq!(interner.resolve(common.if_), "if");
+        assert_eq!(interner.resolve(common.else_), "else");
+        assert_eq!(interner.resolve(common.end), "end");
+    }
 
-        // Merge empty interner2
-        let remap = interner1.merge_from(&interner2);
+    #[test]
+    fn test_thread_safe_intern() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
 
-        assert!(remap.is_empty());
-        assert_eq!(interner1.len(), 1);
-        assert_eq!(interner1.resolve(id1), "test");
+        let interner = Arc::new(StringInterner::new());
+        let barrier = Arc::new(Barrier::new(4));
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let interner = Arc::clone(&interner);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    // All threads interning the same strings
+                    let _ = interner.intern("shared");
+                    let _ = interner.intern("strings");
+                    let id = interner.intern("unique");
+                    id
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let _ = handle.join().unwrap();
+        }
+
+        // Should have deduplicated properly
+        assert_eq!(interner.len(), 3);
     }
 }
