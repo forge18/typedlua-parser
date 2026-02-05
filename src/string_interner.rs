@@ -188,6 +188,32 @@ impl StringInterner {
         string_to_id.insert(s.to_string(), id);
         id
     }
+
+    /// Merge strings from another interner into this one.
+    /// Returns a mapping from old StringIds (from other) to new StringIds (in self).
+    /// This is used for parallel parsing where each thread has its own interner.
+    pub fn merge_from(&mut self, other: &StringInterner) -> FxHashMap<StringId, StringId> {
+        let mut remap = FxHashMap::default();
+        let other_strings = other.id_to_string.borrow();
+
+        for (old_id, string) in other_strings.iter().enumerate() {
+            let old_id = StringId(old_id as u32);
+            // Check if this string already exists in self
+            if let Some(&existing_id) = self.string_to_id.borrow().get(string) {
+                remap.insert(old_id, existing_id);
+            } else {
+                // Insert the new string and get its ID
+                let new_id = StringId(self.id_to_string.borrow().len() as u32);
+                self.id_to_string.borrow_mut().push(string.clone());
+                self.string_to_id
+                    .borrow_mut()
+                    .insert(string.clone(), new_id);
+                remap.insert(old_id, new_id);
+            }
+        }
+
+        remap
+    }
 }
 
 impl StringId {
@@ -279,5 +305,55 @@ mod tests {
         let id = interner.intern("callback_test");
         let result = interner.with_resolved(id, |s| s.len());
         assert_eq!(result, "callback_test".len());
+    }
+
+    #[test]
+    fn test_merge_from() {
+        // Create two separate interners (simulating per-thread interners)
+        let mut interner1 = StringInterner::new();
+        let mut interner2 = StringInterner::new();
+
+        // Intern some strings in each
+        let id1_a = interner1.intern("hello");
+        let id1_b = interner1.intern("world");
+        let id2_a = interner2.intern("hello"); // Same string as in interner1
+        let id2_b = interner2.intern("foo");
+        let id2_c = interner2.intern("bar");
+
+        // Merge interner2 into interner1
+        let remap = interner1.merge_from(&interner2);
+
+        // Check that the remap table has entries for all strings from interner2
+        assert_eq!(remap.len(), 3);
+
+        // "hello" should map to the existing ID in interner1
+        assert_eq!(remap[&id2_a], id1_a);
+
+        // "foo" and "bar" should map to new IDs
+        let new_id_foo = remap[&id2_b];
+        let new_id_bar = remap[&id2_c];
+
+        // Verify the merged interner has all strings
+        assert_eq!(interner1.len(), 4); // hello, world, foo, bar
+        assert_eq!(interner1.resolve(id1_a), "hello");
+        assert_eq!(interner1.resolve(id1_b), "world");
+        assert_eq!(interner1.resolve(new_id_foo), "foo");
+        assert_eq!(interner1.resolve(new_id_bar), "bar");
+    }
+
+    #[test]
+    fn test_merge_from_empty() {
+        let mut interner1 = StringInterner::new();
+        let interner2 = StringInterner::new();
+
+        // Add some strings to interner1 before merging
+        let id1 = interner1.intern("test");
+
+        // Merge empty interner2
+        let remap = interner1.merge_from(&interner2);
+
+        assert!(remap.is_empty());
+        assert_eq!(interner1.len(), 1);
+        assert_eq!(interner1.resolve(id1), "test");
     }
 }
