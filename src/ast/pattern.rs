@@ -56,4 +56,11 @@ impl Pattern {
             Pattern::Or(or) => or.span,
         }
     }
+
+    pub fn node_id(&self) -> Option<super::StringId> {
+        match self {
+            Pattern::Identifier(id) => Some(id.node),
+            _ => None,
+        }
+    }
 }
