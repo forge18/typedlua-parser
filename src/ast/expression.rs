@@ -1,7 +1,7 @@
 use super::{pattern::Pattern, statement::TypeParameter, types::Type, Ident};
 use crate::span::Span;
 use crate::string_interner::StringId;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::statement::{Block, Parameter};
 

@@ -1,6 +1,6 @@
 use super::{expression::Expression, expression::Literal, Ident};
 use crate::span::Span;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum Pattern<'arena> {

@@ -2,18 +2,18 @@ use super::{Parser, ParserError, PatternParser, StatementParser, TypeParser};
 use crate::ast::expression::*;
 use crate::lexer::TokenKind;
 
-pub trait ExpressionParser {
-    fn parse_expression(&mut self) -> Result<Expression, ParserError>;
+pub trait ExpressionParser<'arena> {
+    fn parse_expression(&mut self) -> Result<Expression<'arena>, ParserError>;
 }
 
-impl ExpressionParser for Parser<'_> {
-    fn parse_expression(&mut self) -> Result<Expression, ParserError> {
+impl<'a, 'arena> ExpressionParser<'arena> for Parser<'a, 'arena> {
+    fn parse_expression(&mut self) -> Result<Expression<'arena>, ParserError> {
         self.parse_assignment()
     }
 }
 
 // Expression parsing using Pratt parsing for precedence
-impl Parser<'_> {
+impl<'a, 'arena> Parser<'a, 'arena> {
     #[inline]
     fn parse_assignment(&mut self) -> Result<Expression, ParserError> {
         let checkpoint = self.position;
@@ -949,6 +949,7 @@ impl Parser<'_> {
                         self.diagnostic_handler.clone(),
                         self.interner,
                         self.common,
+                        self.arena,
                     );
                     let expr = temp_parser.parse_expression()?;
                     ast_parts.push(crate::ast::expression::TemplatePart::Expression(self.arena.alloc(
@@ -1136,7 +1137,8 @@ mod tests {
     use crate::string_interner::StringInterner;
     use std::sync::Arc;
 
-    fn parse_expression(source: &str) -> Result<Expression, ParserError> {
+    fn parse_expression(source: &str) -> Result<Expression<'static>, ParserError> {
+        use bumpalo::Bump;
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
@@ -1144,7 +1146,8 @@ mod tests {
             message: format!("Lexer error: {:?}", e),
             span: Span::default(),
         })?;
-        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        let arena = Box::leak(Box::new(Bump::new()));
+        let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_expression()
     }
 

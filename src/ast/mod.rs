@@ -5,7 +5,7 @@ pub mod types;
 
 use crate::span::Span;
 use crate::string_interner::StringId;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Wrapper for AST nodes with span information
 #[derive(Debug, Clone, Serialize)]

@@ -17,7 +17,7 @@
 //!
 //! ```
 //! use typedlua_parser::prelude::*;
-//! use typedlua_parser::{DiContainer, ServiceLifetime};
+//! use typedlua_parser::{DiContainer, ServiceLifetime, Bump};
 //! use std::sync::Arc;
 //!
 //! let source = r#"
@@ -33,11 +33,12 @@
 //!     ServiceLifetime::Transient,
 //! );
 //!
+//! let arena = Bump::new();
 //! let handler = container.resolve::<Arc<dyn DiagnosticHandler>>().unwrap();
 //! let (interner, common) = StringInterner::new_with_common_identifiers();
 //! let mut lexer = Lexer::new(source, handler.clone(), &interner);
 //! let tokens = lexer.tokenize().unwrap();
-//! let mut parser = Parser::new(tokens, handler, &interner, &common);
+//! let mut parser = Parser::new(tokens, handler, &interner, &common, &arena);
 //! let program = parser.parse().unwrap();
 //!
 //! println!("Parsed {} statements", program.statements.len());
@@ -56,6 +57,7 @@ use std::sync::Arc;
 
 // Re-exports for convenience
 pub use ast::{Ident, Program, Spanned};
+pub use bumpalo::Bump;
 pub use di::{DiContainer, ServiceLifetime};
 pub use diagnostics::{CollectingDiagnosticHandler, Diagnostic, DiagnosticHandler};
 pub use errors::LexerError;
@@ -80,6 +82,7 @@ pub mod prelude {
     };
     pub use crate::span::Span;
     pub use crate::string_interner::{CommonIdentifiers, StringId, StringInterner};
+    pub use bumpalo::Bump;
 }
 
 /// Parse source code into an AST using DI container
@@ -105,10 +108,11 @@ pub mod prelude {
 ///     Err(e) => eprintln!("Parse error: {}", e),
 /// }
 /// ```
-pub fn parse_with_container(
+pub fn parse_with_container<'arena>(
     source: &str,
     container: &mut DiContainer,
-) -> Result<Program, ParserError> {
+    arena: &'arena Bump,
+) -> Result<Program<'arena>, ParserError> {
     let diagnostic_handler = match container.resolve::<Arc<dyn DiagnosticHandler>>() {
         Some(handler) => handler,
         None => {
@@ -127,7 +131,7 @@ pub fn parse_with_container(
         span: Span::default(),
     })?;
 
-    let mut parser = Parser::new(tokens, diagnostic_handler, &interner, &common);
+    let mut parser = Parser::new(tokens, diagnostic_handler, &interner, &common, arena);
     parser.parse()
 }
 
@@ -144,7 +148,8 @@ mod tests {
             |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
             ServiceLifetime::Transient,
         );
-        let result = parse_with_container(source, &mut container);
+        let arena = Bump::new();
+        let result = parse_with_container(source, &mut container, &arena);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().statements.len(), 1);
     }
@@ -161,7 +166,8 @@ mod tests {
             |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
             ServiceLifetime::Transient,
         );
-        let result = parse_with_container(source, &mut container);
+        let arena = Bump::new();
+        let result = parse_with_container(source, &mut container, &arena);
         assert!(result.is_ok());
     }
 
@@ -178,7 +184,8 @@ mod tests {
             |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
             ServiceLifetime::Transient,
         );
-        let result = parse_with_container(source, &mut container);
+        let arena = Bump::new();
+        let result = parse_with_container(source, &mut container, &arena);
         assert!(result.is_ok());
     }
 
@@ -199,7 +206,8 @@ mod tests {
             |_| Arc::new(CollectingDiagnosticHandler::new()) as Arc<dyn DiagnosticHandler>,
             ServiceLifetime::Transient,
         );
-        let result = parse_with_container(source, &mut container);
+        let arena = Bump::new();
+        let result = parse_with_container(source, &mut container, &arena);
         assert!(result.is_ok());
     }
 
@@ -232,7 +240,8 @@ mod tests {
             ServiceLifetime::Transient,
         );
 
-        let result = parse_with_container(source, &mut container);
+        let arena = Bump::new();
+        let result = parse_with_container(source, &mut container, &arena);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().statements.len(), 1);
     }

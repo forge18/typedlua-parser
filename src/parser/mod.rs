@@ -310,13 +310,13 @@ mod tests {
     use crate::string_interner::StringInterner;
     use std::sync::Arc;
 
-    fn parse_program(source: &str) -> (Program, Arc<CollectingDiagnosticHandler>) {
-        let arena = Bump::new();
+    fn parse_program(source: &str) -> (Program<'static>, Arc<CollectingDiagnosticHandler>) {
+        let arena = Box::leak(Box::new(Bump::new()));
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
         let tokens = lexer.tokenize().expect("Failed to tokenize");
-        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena);
         let program = parser.parse().expect("Failed to parse");
         (program, handler)
     }

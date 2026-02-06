@@ -4,17 +4,17 @@ use crate::ast::pattern::*;
 use crate::ast::Spanned;
 use crate::lexer::TokenKind;
 
-pub trait PatternParser {
-    fn parse_pattern(&mut self) -> Result<Pattern, ParserError>;
+pub trait PatternParser<'arena> {
+    fn parse_pattern(&mut self) -> Result<Pattern<'arena>, ParserError>;
 }
 
-impl PatternParser for Parser<'_> {
-    fn parse_pattern(&mut self) -> Result<Pattern, ParserError> {
+impl<'a, 'arena> PatternParser<'arena> for Parser<'a, 'arena> {
+    fn parse_pattern(&mut self) -> Result<Pattern<'arena>, ParserError> {
         self.parse_or_pattern()
     }
 }
 
-impl Parser<'_> {
+impl<'a, 'arena> Parser<'a, 'arena> {
     fn parse_or_pattern(&mut self) -> Result<Pattern, ParserError> {
         let mut alternatives = vec![self.parse_primary_pattern()?];
 
@@ -109,7 +109,7 @@ impl Parser<'_> {
     }
 }
 
-impl Parser<'_> {
+impl<'a, 'arena> Parser<'a, 'arena> {
     fn parse_array_pattern(&mut self) -> Result<Pattern, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
@@ -222,6 +222,7 @@ impl Parser<'_> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBrace, "Expected '}' after object pattern")?;
 
+        let properties = self.arena.alloc_slice_fill_iter(properties.into_iter());
         Ok(Pattern::Object(ObjectPattern {
             properties,
             span: start_span.combine(&end_span),
@@ -238,7 +239,8 @@ mod tests {
     use crate::string_interner::StringInterner;
     use std::sync::Arc;
 
-    fn parse_pattern(source: &str) -> Result<Pattern, ParserError> {
+    fn parse_pattern(source: &str) -> Result<Pattern<'static>, ParserError> {
+        use bumpalo::Bump;
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
@@ -246,7 +248,8 @@ mod tests {
             message: format!("Lexer error: {:?}", e),
             span: Span::default(),
         })?;
-        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        let arena = Box::leak(Box::new(Bump::new()));
+        let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_pattern()
     }
 

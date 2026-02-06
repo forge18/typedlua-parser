@@ -565,6 +565,7 @@ dependencies = [
 name = "typedlua-parser"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "criterion",
  "lasso",
  "rustc-hash",

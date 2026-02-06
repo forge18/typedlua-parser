@@ -6,13 +6,13 @@ use crate::ast::Spanned;
 use crate::lexer::TokenKind;
 use crate::span::Span;
 
-pub trait TypeParser {
-    fn parse_type(&mut self) -> Result<Type, ParserError>;
+pub trait TypeParser<'arena> {
+    fn parse_type(&mut self) -> Result<Type<'arena>, ParserError>;
 }
 
-impl TypeParser for Parser<'_> {
+impl<'a, 'arena> TypeParser<'arena> for Parser<'a, 'arena> {
     #[inline]
-    fn parse_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_type(&mut self) -> Result<Type<'arena>, ParserError> {
         if matches!(&self.current().kind, TokenKind::Identifier(_)) {
             let checkpoint = self.position;
             let start_span = self.current_span();
@@ -40,7 +40,7 @@ impl TypeParser for Parser<'_> {
     }
 }
 
-impl Parser<'_> {
+impl<'a, 'arena> Parser<'a, 'arena> {
     #[inline]
     fn parse_union_type(&mut self) -> Result<Type, ParserError> {
         let mut types = vec![self.parse_intersection_type()?];
@@ -550,7 +550,7 @@ impl Parser<'_> {
                 crate::lexer::TemplatePart::Expression(tokens) => {
                     // Parse the expression as a type
                     let handler = self.diagnostic_handler.clone();
-                    let mut temp_parser = Parser::new(tokens, handler, self.interner, self.common);
+                    let mut temp_parser = Parser::new(tokens, handler, self.interner, self.common, self.arena);
                     let typ = temp_parser.parse_type()?;
                     parts.push(TemplateLiteralTypePart::Type(typ));
                 }
@@ -693,7 +693,8 @@ mod tests {
     use crate::string_interner::StringInterner;
     use std::sync::Arc;
 
-    fn parse_type(source: &str) -> Result<Type, ParserError> {
+    fn parse_type(source: &str) -> Result<Type<'static>, ParserError> {
+        use bumpalo::Bump;
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
@@ -701,7 +702,8 @@ mod tests {
             message: format!("Lexer error: {:?}", e),
             span: Span::default(),
         })?;
-        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        let arena = Box::leak(Box::new(Bump::new()));
+        let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_type()
     }
 
@@ -1122,7 +1124,7 @@ mod tests {
         let result = parse_type("nil");
         assert!(result.is_ok());
         // nil token is parsed as a literal nil type
-        let ty = result.unwrap();
+        let (ty, _arena) = result.unwrap();
         match ty.kind {
             TypeKind::Literal(Literal::Nil) => {}
             TypeKind::Primitive(PrimitiveType::Nil) => {}

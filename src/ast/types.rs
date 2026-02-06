@@ -5,7 +5,7 @@ use super::{
     Ident,
 };
 use crate::span::Span;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type<'arena> {
@@ -42,8 +42,7 @@ pub enum TypeKind<'arena> {
     TypeQuery(&'arena Expression<'arena>),
     #[serde(borrow)]
     KeyOf(&'arena Type<'arena>),
-    #[serde(borrow)]
-    IndexAccess(&'arena Type<'arena>, &'arena Type<'arena>),
+    IndexAccess(#[serde(borrow)] &'arena Type<'arena>, #[serde(borrow)] &'arena Type<'arena>),
     #[serde(borrow)]
     Conditional(ConditionalType<'arena>),
     #[serde(borrow)]

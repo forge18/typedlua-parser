@@ -7,14 +7,14 @@ use crate::ast::Spanned;
 use crate::lexer::TokenKind;
 use crate::span::Span;
 
-pub trait StatementParser {
-    fn parse_statement(&mut self) -> Result<Statement, ParserError>;
-    fn parse_block(&mut self) -> Result<Block, ParserError>;
+pub trait StatementParser<'arena> {
+    fn parse_statement(&mut self) -> Result<Statement<'arena>, ParserError>;
+    fn parse_block(&mut self) -> Result<Block<'arena>, ParserError>;
 }
 
-impl StatementParser for Parser<'_> {
+impl<'a, 'arena> StatementParser<'arena> for Parser<'a, 'arena> {
     #[inline]
-    fn parse_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         // Check for decorators first
         if self.check(&TokenKind::At) {
             return self.parse_class_declaration();
@@ -99,7 +99,7 @@ trait Spannable {
     fn span(&self) -> Span;
 }
 
-impl Spannable for Statement {
+impl<'arena> Spannable for Statement<'arena> {
     fn span(&self) -> Span {
         match self {
             Statement::Variable(v) => v.span,
@@ -112,7 +112,7 @@ impl Spannable for Statement {
             Statement::Export(e) => e.span,
             Statement::If(i) => i.span,
             Statement::While(w) => w.span,
-            Statement::For(f) => match f.as_ref() {
+            Statement::For(f) => match f {
                 ForStatement::Numeric(n) => n.span,
                 ForStatement::Generic(g) => g.span,
             },
@@ -137,7 +137,7 @@ impl Spannable for Statement {
 }
 
 // Statement implementations
-impl Parser<'_> {
+impl<'a, 'arena> Parser<'a, 'arena> {
     fn parse_label_statement(&mut self) -> Result<Statement, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::ColonColon, "Expected '::'")?;
@@ -2451,7 +2451,8 @@ mod tests {
     use crate::string_interner::StringInterner;
     use std::sync::Arc;
 
-    fn parse_statement(source: &str) -> Result<Statement, ParserError> {
+    fn parse_statement(source: &str) -> Result<Statement<'static>, ParserError> {
+        use bumpalo::Bump;
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
@@ -2459,11 +2460,13 @@ mod tests {
             message: format!("Lexer error: {:?}", e),
             span: Span::default(),
         })?;
-        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        let arena = Box::leak(Box::new(Bump::new()));
+        let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_statement()
     }
 
-    fn parse_program(source: &str) -> Result<Program, ParserError> {
+    fn parse_program(source: &str) -> Result<Program<'static>, ParserError> {
+        use bumpalo::Bump;
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
@@ -2471,7 +2474,8 @@ mod tests {
             message: format!("Lexer error: {:?}", e),
             span: Span::default(),
         })?;
-        let mut parser = Parser::new(tokens, handler, &interner, &common);
+        let arena = Box::leak(Box::new(Bump::new()));
+        let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse()
     }
 
