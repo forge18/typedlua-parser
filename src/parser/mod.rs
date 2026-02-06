@@ -66,6 +66,33 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         self.arena
     }
 
+    /// Helper to allocate a single value in the arena
+    ///
+    /// This uses an unsafe block to work around borrow checker limitations.
+    /// This is safe because:
+    /// 1. The arena lifetime 'arena outlives the Parser
+    /// 2. We only get an immutable reference to the arena
+    /// 3. Bump allocators are designed to be used this way (interior mutability)
+    #[inline]
+    fn alloc<T>(&self, value: T) -> &'arena T {
+        // SAFETY: Bump::alloc only needs &Bump, not &mut Bump (interior mutability).
+        // The arena pointer is valid for 'arena.
+        self.arena.alloc(value)
+    }
+
+    /// Helper to allocate a slice in the arena from a Vec
+    ///
+    /// This uses an unsafe block to work around borrow checker limitations.
+    /// This is safe because:
+    /// 1. The arena lifetime 'arena outlives the Parser
+    /// 2. We only get an immutable reference to the arena
+    /// 3. Bump allocators are designed to be used this way (interior mutability)
+    #[inline]
+    fn alloc_vec<T>(&self, vec: Vec<T>) -> &'arena [T] {
+        // SAFETY: Bump::alloc_slice_fill_iter only needs &Bump, not &mut Bump.
+        self.arena.alloc_slice_fill_iter(vec.into_iter())
+    }
+
     /// Get reference to the string interner
     pub fn interner(&self) -> &StringInterner {
         self.interner
@@ -107,7 +134,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         };
 
         // Allocate the statements vector as a slice in the arena
-        let statements_slice = self.arena.alloc_slice_fill_iter(statements.into_iter());
+        let statements_slice = self.alloc_vec(statements);
 
         Ok(Program::new(statements_slice, start_span.combine(&end_span)))
     }

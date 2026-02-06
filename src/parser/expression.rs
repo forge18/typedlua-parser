@@ -15,7 +15,7 @@ impl<'a, 'arena> ExpressionParser<'arena> for Parser<'a, 'arena> {
 // Expression parsing using Pratt parsing for precedence
 impl<'a, 'arena> Parser<'a, 'arena> {
     #[inline]
-    fn parse_assignment(&mut self) -> Result<Expression, ParserError> {
+    fn parse_assignment(&mut self) -> Result<Expression<'arena>, ParserError> {
         let checkpoint = self.position;
 
         if let Ok(arrow) = self.try_parse_arrow_function() {
@@ -30,7 +30,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let right = self.parse_assignment()?;
             let span = expr.span.combine(&right.span);
             return Ok(Expression {
-                kind: ExpressionKind::Assignment(self.arena.alloc(expr), op, self.arena.alloc(right)),
+                kind: ExpressionKind::Assignment(self.alloc(expr), op, self.alloc(right)),
                 span,
                 ..Default::default()
             });
@@ -39,7 +39,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(expr)
     }
 
-    fn try_parse_arrow_function(&mut self) -> Result<Expression, ParserError> {
+    fn try_parse_arrow_function(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
 
         // Parse parameters - either single identifier or (param list)
@@ -51,14 +51,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         } else if matches!(&self.current().kind, TokenKind::Identifier(_)) {
             // Single parameter without parens
             let param_name = self.parse_identifier()?;
-            vec![crate::ast::statement::Parameter {
+            self.alloc_vec(vec![crate::ast::statement::Parameter {
                 pattern: crate::ast::pattern::Pattern::Identifier(param_name),
                 type_annotation: None,
                 default: None,
                 is_rest: false,
                 is_optional: false,
                 span: start_span,
-            }]
+            }])
         } else {
             return Err(ParserError {
                 message: "Expected parameter or '(' in arrow function".to_string(),
@@ -87,7 +87,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             ArrowBody::Block(block)
         } else {
             let expr = self.parse_assignment()?;
-            ArrowBody::Expression(self.arena.alloc(expr))
+            ArrowBody::Expression(self.alloc(expr))
         };
 
         let end_span = self.current_span();
@@ -104,7 +104,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_conditional(&mut self) -> Result<Expression, ParserError> {
+    fn parse_conditional(&mut self) -> Result<Expression<'arena>, ParserError> {
         // Check for try expression at the beginning
         if self.check(&TokenKind::Try) {
             return self.parse_try_expression_full();
@@ -119,9 +119,9 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let span = expr.span.combine(&else_expr.span);
             return Ok(Expression {
                 kind: ExpressionKind::Conditional(
-                    self.arena.alloc(expr),
-                    self.arena.alloc(then_expr),
-                    self.arena.alloc(else_expr),
+                    self.alloc(expr),
+                    self.alloc(then_expr),
+                    self.alloc(else_expr),
                 ),
                 span,
                 ..Default::default()
@@ -131,7 +131,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(expr)
     }
 
-    fn parse_try_expression_full(&mut self) -> Result<Expression, ParserError> {
+    fn parse_try_expression_full(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Try, "Expected 'try'")?;
 
@@ -160,9 +160,9 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         Ok(Expression {
             kind: ExpressionKind::Try(TryExpression {
-                expression: self.arena.alloc(expression),
+                expression: self.alloc(expression),
                 catch_variable,
-                catch_expression: self.arena.alloc(catch_expression),
+                catch_expression: self.alloc(catch_expression),
                 span: start_span.combine(&end_span),
             }),
             span: start_span.combine(&end_span),
@@ -171,14 +171,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_logical_or(&mut self) -> Result<Expression, ParserError> {
+    fn parse_logical_or(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_null_coalesce()?;
 
         while self.match_token(&[TokenKind::Or]) {
             let right = self.parse_null_coalesce()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::Or, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(BinaryOp::Or, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -188,7 +188,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_null_coalesce(&mut self) -> Result<Expression, ParserError> {
+    fn parse_null_coalesce(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_logical_and()?;
 
         while self.match_token(&[TokenKind::QuestionQuestion]) {
@@ -197,8 +197,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             expr = Expression {
                 kind: ExpressionKind::Binary(
                     BinaryOp::NullCoalesce,
-                    self.arena.alloc(expr),
-                    self.arena.alloc(right),
+                    self.alloc(expr),
+                    self.alloc(right),
                 ),
                 span,
                 ..Default::default()
@@ -209,14 +209,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_logical_and(&mut self) -> Result<Expression, ParserError> {
+    fn parse_logical_and(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_bitwise_or()?;
 
         while self.match_token(&[TokenKind::And]) {
             let right = self.parse_bitwise_or()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::And, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(BinaryOp::And, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -226,14 +226,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_bitwise_or(&mut self) -> Result<Expression, ParserError> {
+    fn parse_bitwise_or(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_bitwise_xor()?;
 
         while self.match_token(&[TokenKind::Pipe]) {
             let right = self.parse_bitwise_xor()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::BitwiseOr, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(BinaryOp::BitwiseOr, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -243,14 +243,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_bitwise_xor(&mut self) -> Result<Expression, ParserError> {
+    fn parse_bitwise_xor(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_bitwise_and()?;
 
         while self.match_token(&[TokenKind::Tilde]) {
             let right = self.parse_bitwise_and()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::BitwiseXor, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(BinaryOp::BitwiseXor, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -260,14 +260,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_bitwise_and(&mut self) -> Result<Expression, ParserError> {
+    fn parse_bitwise_and(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_equality()?;
 
         while self.match_token(&[TokenKind::Ampersand]) {
             let right = self.parse_equality()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::BitwiseAnd, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(BinaryOp::BitwiseAnd, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -277,14 +277,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_equality(&mut self) -> Result<Expression, ParserError> {
+    fn parse_equality(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_comparison()?;
 
         while let Some(op) = self.match_equality_op() {
             let right = self.parse_comparison()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(op, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(op, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -294,14 +294,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_comparison(&mut self) -> Result<Expression, ParserError> {
+    fn parse_comparison(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_concatenation()?;
 
         while let Some(op) = self.match_comparison_op() {
             let right = self.parse_concatenation()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(op, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(op, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -311,7 +311,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_concatenation(&mut self) -> Result<Expression, ParserError> {
+    fn parse_concatenation(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_shift()?;
 
         while self.match_token(&[TokenKind::DotDot]) {
@@ -320,8 +320,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             expr = Expression {
                 kind: ExpressionKind::Binary(
                     BinaryOp::Concatenate,
-                    self.arena.alloc(expr),
-                    self.arena.alloc(right),
+                    self.alloc(expr),
+                    self.alloc(right),
                 ),
                 span,
                 ..Default::default()
@@ -332,14 +332,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_shift(&mut self) -> Result<Expression, ParserError> {
+    fn parse_shift(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_additive()?;
 
         while let Some(op) = self.match_shift_op() {
             let right = self.parse_additive()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(op, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(op, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -349,14 +349,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_additive(&mut self) -> Result<Expression, ParserError> {
+    fn parse_additive(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_multiplicative()?;
 
         while let Some(op) = self.match_additive_op() {
             let right = self.parse_multiplicative()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(op, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(op, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -366,14 +366,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_multiplicative(&mut self) -> Result<Expression, ParserError> {
+    fn parse_multiplicative(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_power()?;
 
         while let Some(op) = self.match_multiplicative_op() {
             let right = self.parse_power()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(op, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(op, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             };
@@ -382,14 +382,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(expr)
     }
 
-    fn parse_power(&mut self) -> Result<Expression, ParserError> {
+    fn parse_power(&mut self) -> Result<Expression<'arena>, ParserError> {
         let expr = self.parse_unary()?;
 
         if self.match_token(&[TokenKind::Caret]) {
             let right = self.parse_power()?; // Right associative
             let span = expr.span.combine(&right.span);
             return Ok(Expression {
-                kind: ExpressionKind::Binary(BinaryOp::Power, self.arena.alloc(expr), self.arena.alloc(right)),
+                kind: ExpressionKind::Binary(BinaryOp::Power, self.alloc(expr), self.alloc(right)),
                 span,
                 ..Default::default()
             });
@@ -398,7 +398,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(expr)
     }
 
-    fn parse_unary(&mut self) -> Result<Expression, ParserError> {
+    fn parse_unary(&mut self) -> Result<Expression<'arena>, ParserError> {
         // Handle 'new' keyword for class instantiation
         if self.check(&TokenKind::New) {
             let start_span = self.current_span();
@@ -427,7 +427,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let start_span = self.current_span();
             let span = start_span.combine(&expr.span);
             return Ok(Expression {
-                kind: ExpressionKind::Unary(op, self.arena.alloc(expr)),
+                kind: ExpressionKind::Unary(op, self.alloc(expr)),
                 span,
                 ..Default::default()
             });
@@ -436,7 +436,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         self.parse_postfix()
     }
 
-    fn parse_postfix(&mut self) -> Result<Expression, ParserError> {
+    fn parse_postfix(&mut self) -> Result<Expression<'arena>, ParserError> {
         let mut expr = self.parse_primary()?;
 
         loop {
@@ -446,7 +446,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let member = self.parse_identifier()?;
                     let span = expr.span.combine(&member.span);
                     expr = Expression {
-                        kind: ExpressionKind::Member(self.arena.alloc(expr), member),
+                        kind: ExpressionKind::Member(self.alloc(expr), member),
                         span,
                         ..Default::default()
                     };
@@ -457,7 +457,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     self.consume(TokenKind::RightBracket, "Expected ']' after index")?;
                     let span = expr.span.combine(&index.span);
                     expr = Expression {
-                        kind: ExpressionKind::Index(self.arena.alloc(expr), self.arena.alloc(index)),
+                        kind: ExpressionKind::Index(self.alloc(expr), self.alloc(index)),
                         span,
                         ..Default::default()
                     };
@@ -467,10 +467,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let arguments = self.parse_argument_list()?;
                     let end_span = self.current_span();
                     self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
-                    let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                    let arguments = self.alloc_vec(arguments);
                     let span = expr.span.combine(&end_span);
                     expr = Expression {
-                        kind: ExpressionKind::Call(self.arena.alloc(expr), arguments, None),
+                        kind: ExpressionKind::Call(self.alloc(expr), arguments, None),
                         span,
                         ..Default::default()
                     };
@@ -492,11 +492,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                                     TokenKind::RightParen,
                                     "Expected ')' after arguments",
                                 )?;
-                                let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                                let arguments = self.alloc_vec(arguments);
                                 let span = expr.span.combine(&end_span);
                                 expr = Expression {
                                     kind: ExpressionKind::Call(
-                                        self.arena.alloc(expr),
+                                        self.alloc(expr),
                                         arguments,
                                         Some(type_args),
                                     ),
@@ -518,10 +518,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let arguments = self.parse_argument_list()?;
                     let end_span = self.current_span();
                     self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
-                    let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                    let arguments = self.alloc_vec(arguments);
                     let span = expr.span.combine(&end_span);
                     expr = Expression {
-                        kind: ExpressionKind::MethodCall(self.arena.alloc(expr), method, arguments, None),
+                        kind: ExpressionKind::MethodCall(self.alloc(expr), method, arguments, None),
                         span,
                         ..Default::default()
                     };
@@ -531,7 +531,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let right = self.parse_unary()?;
                     let span = expr.span.combine(&right.span);
                     expr = Expression {
-                        kind: ExpressionKind::Pipe(self.arena.alloc(expr), self.arena.alloc(right)),
+                        kind: ExpressionKind::Pipe(self.alloc(expr), self.alloc(right)),
                         span,
                         ..Default::default()
                     };
@@ -546,8 +546,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             let span = expr.span.combine(&index.span);
                             expr = Expression {
                                 kind: ExpressionKind::OptionalIndex(
-                                    self.arena.alloc(expr),
-                                    self.arena.alloc(index),
+                                    self.alloc(expr),
+                                    self.alloc(index),
                                 ),
                                 span,
                                 ..Default::default()
@@ -558,10 +558,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             let arguments = self.parse_argument_list()?;
                             let end_span = self.current_span();
                             self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
-                            let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                            let arguments = self.alloc_vec(arguments);
                             let span = expr.span.combine(&end_span);
                             expr = Expression {
-                                kind: ExpressionKind::OptionalCall(self.arena.alloc(expr), arguments, None),
+                                kind: ExpressionKind::OptionalCall(self.alloc(expr), arguments, None),
                                 span,
                                 ..Default::default()
                             };
@@ -573,11 +573,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             let arguments = self.parse_argument_list()?;
                             let end_span = self.current_span();
                             self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
-                            let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                            let arguments = self.alloc_vec(arguments);
                             let span = expr.span.combine(&end_span);
                             expr = Expression {
                                 kind: ExpressionKind::OptionalMethodCall(
-                                    self.arena.alloc(expr),
+                                    self.alloc(expr),
                                     method,
                                     arguments,
                                     None,
@@ -590,7 +590,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             let member = self.parse_identifier()?;
                             let span = expr.span.combine(&member.span);
                             expr = Expression {
-                                kind: ExpressionKind::OptionalMember(self.arena.alloc(expr), member),
+                                kind: ExpressionKind::OptionalMember(self.alloc(expr), member),
                                 span,
                                 ..Default::default()
                             };
@@ -602,7 +602,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let right = self.parse_postfix()?;
                     let span = expr.span.combine(&right.span);
                     expr = Expression {
-                        kind: ExpressionKind::ErrorChain(self.arena.alloc(expr), self.arena.alloc(right)),
+                        kind: ExpressionKind::ErrorChain(self.alloc(expr), self.alloc(right)),
                         span,
                         ..Default::default()
                     };
@@ -614,7 +614,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(expr)
     }
 
-    fn parse_primary(&mut self) -> Result<Expression, ParserError> {
+    fn parse_primary(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
 
         match &self.current().kind.clone() {
@@ -709,7 +709,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let mut wrapped = expr;
                 for _ in 0..paren_count {
                     wrapped = Expression {
-                        kind: ExpressionKind::Parenthesized(self.arena.alloc(wrapped)),
+                        kind: ExpressionKind::Parenthesized(self.alloc(wrapped)),
                         span: start_span.combine(&end_span),
                         ..Default::default()
                     };
@@ -738,7 +738,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
     }
 
-    fn parse_object_or_table(&mut self) -> Result<Expression, ParserError> {
+    fn parse_object_or_table(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBrace, "Expected '{'")?;
 
@@ -749,7 +749,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let value = self.parse_expression()?;
                 let span = start_span.combine(&value.span);
                 properties.push(ObjectProperty::Spread {
-                    value: self.arena.alloc(value),
+                    value: self.alloc(value),
                     span,
                 });
             } else if self.check(&TokenKind::LeftBracket) {
@@ -760,8 +760,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let value = self.parse_expression()?;
                 let span = start_span.combine(&value.span);
                 properties.push(ObjectProperty::Computed {
-                    key: self.arena.alloc(key),
-                    value: self.arena.alloc(value),
+                    key: self.alloc(key),
+                    value: self.alloc(value),
                     span,
                 });
             } else {
@@ -776,7 +776,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let span = key.span.combine(&value.span);
                 properties.push(ObjectProperty::Property {
                     key,
-                    value: self.arena.alloc(value),
+                    value: self.alloc(value),
                     span,
                 });
             }
@@ -789,7 +789,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBrace, "Expected '}' after object")?;
 
-        let properties = self.arena.alloc_slice_fill_iter(properties.into_iter());
+        let properties = self.alloc_vec(properties);
         Ok(Expression {
             kind: ExpressionKind::Object(properties),
             span: start_span.combine(&end_span),
@@ -797,7 +797,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_array(&mut self) -> Result<Expression, ParserError> {
+    fn parse_array(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
 
@@ -820,7 +820,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBracket, "Expected ']' after array")?;
 
-        let elements = self.arena.alloc_slice_fill_iter(elements.into_iter());
+        let elements = self.alloc_vec(elements);
         Ok(Expression {
             kind: ExpressionKind::Array(elements),
             span: start_span.combine(&end_span),
@@ -829,7 +829,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_function_expression(&mut self) -> Result<Expression, ParserError> {
+    fn parse_function_expression(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Function, "Expected 'function'")?;
 
@@ -866,11 +866,12 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_match_expression(&mut self) -> Result<Expression, ParserError> {
+    fn parse_match_expression(&mut self) -> Result<Expression<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Match, "Expected 'match'")?;
 
-        let value = self.arena.alloc(self.parse_expression()?);
+        let value_expr = self.parse_expression()?;
+        let value = self.alloc(value_expr);
 
         self.consume(TokenKind::LeftBrace, "Expected '{' after match value")?;
 
@@ -882,7 +883,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBrace, "Expected '}' after match arms")?;
 
-        let arms = self.arena.alloc_slice_fill_iter(arms.into_iter());
+        let arms = self.alloc_vec(arms);
         Ok(Expression {
             kind: ExpressionKind::Match(MatchExpression {
                 value,
@@ -894,7 +895,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_match_arm(&mut self) -> Result<MatchArm, ParserError> {
+    fn parse_match_arm(&mut self) -> Result<MatchArm<'arena>, ParserError> {
         let start_span = self.current_span();
         let pattern = self.parse_pattern()?;
 
@@ -913,7 +914,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             MatchArmBody::Block(block)
         } else {
             let expr = self.parse_expression()?;
-            MatchArmBody::Expression(self.arena.alloc(expr))
+            MatchArmBody::Expression(self.alloc(expr))
         };
 
         let end_span = self.current_span();
@@ -933,7 +934,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         &mut self,
         lexer_parts: Vec<crate::lexer::TemplatePart>,
         start_span: crate::span::Span,
-    ) -> Result<Expression, ParserError> {
+    ) -> Result<Expression<'arena>, ParserError> {
         self.advance();
 
         let mut ast_parts = Vec::with_capacity(lexer_parts.len());
@@ -952,14 +953,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         self.arena,
                     );
                     let expr = temp_parser.parse_expression()?;
-                    ast_parts.push(crate::ast::expression::TemplatePart::Expression(self.arena.alloc(
+                    ast_parts.push(crate::ast::expression::TemplatePart::Expression(self.alloc(
                         expr,
                     )));
                 }
             }
         }
 
-        let ast_parts = self.arena.alloc_slice_fill_iter(ast_parts.into_iter());
+        let ast_parts = self.alloc_vec(ast_parts);
         Ok(Expression {
             kind: ExpressionKind::Template(TemplateLiteral {
                 parts: ast_parts,
@@ -970,7 +971,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_argument_list(&mut self) -> Result<Vec<Argument>, ParserError> {
+    fn parse_argument_list(&mut self) -> Result<Vec<Argument<'arena>>, ParserError> {
         let mut arguments = Vec::new();
 
         if self.check(&TokenKind::RightParen) {

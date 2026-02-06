@@ -15,7 +15,7 @@ impl<'a, 'arena> PatternParser<'arena> for Parser<'a, 'arena> {
 }
 
 impl<'a, 'arena> Parser<'a, 'arena> {
-    fn parse_or_pattern(&mut self) -> Result<Pattern, ParserError> {
+    fn parse_or_pattern(&mut self) -> Result<Pattern<'arena>, ParserError> {
         let mut alternatives = vec![self.parse_primary_pattern()?];
 
         // Keep consuming | tokens while in pattern context
@@ -34,12 +34,12 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 .unwrap()
                 .span()
                 .combine(&alternatives.last().unwrap().span());
-            let alternatives = self.arena.alloc_slice_fill_iter(alternatives.into_iter());
+            let alternatives = self.alloc_vec(alternatives);
             Ok(Pattern::Or(OrPattern { alternatives, span }))
         }
     }
 
-    fn parse_primary_pattern(&mut self) -> Result<Pattern, ParserError> {
+    fn parse_primary_pattern(&mut self) -> Result<Pattern<'arena>, ParserError> {
         let start_span = self.current_span();
 
         match &self.current().kind.clone() {
@@ -110,7 +110,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 }
 
 impl<'a, 'arena> Parser<'a, 'arena> {
-    fn parse_array_pattern(&mut self) -> Result<Pattern, ParserError> {
+    fn parse_array_pattern(&mut self) -> Result<Pattern<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
 
@@ -155,14 +155,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBracket, "Expected ']' after array pattern")?;
 
-        let elements = self.arena.alloc_slice_fill_iter(elements.into_iter());
+        let elements = self.alloc_vec(elements);
         Ok(Pattern::Array(ArrayPattern {
             elements,
             span: start_span.combine(&end_span),
         }))
     }
 
-    fn parse_object_pattern(&mut self) -> Result<Pattern, ParserError> {
+    fn parse_object_pattern(&mut self) -> Result<Pattern<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBrace, "Expected '{'")?;
 
@@ -222,7 +222,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBrace, "Expected '}' after object pattern")?;
 
-        let properties = self.arena.alloc_slice_fill_iter(properties.into_iter());
+        let properties = self.alloc_vec(properties);
         Ok(Pattern::Object(ObjectPattern {
             properties,
             span: start_span.combine(&end_span),

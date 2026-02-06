@@ -93,7 +93,7 @@ pub mod prelude {
 /// # Example
 ///
 /// ```
-/// use typedlua_parser::{parse_with_container, DiContainer, ServiceLifetime, CollectingDiagnosticHandler, DiagnosticHandler};
+/// use typedlua_parser::{parse_with_container, DiContainer, ServiceLifetime, CollectingDiagnosticHandler, DiagnosticHandler, Bump};
 /// use std::sync::Arc;
 ///
 /// let source = "const x: number = 42";
@@ -103,7 +103,8 @@ pub mod prelude {
 ///     ServiceLifetime::Transient,
 /// );
 ///
-/// match parse_with_container(source, &mut container) {
+/// let arena = Bump::new();
+/// match parse_with_container(source, &mut container, &arena) {
 ///     Ok(program) => println!("Parsed {} statements", program.statements.len()),
 ///     Err(e) => eprintln!("Parse error: {}", e),
 /// }

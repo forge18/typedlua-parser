@@ -20,7 +20,8 @@ impl<'a, 'arena> TypeParser<'arena> for Parser<'a, 'arena> {
             if let Ok(param_name) = self.parse_identifier() {
                 if self.check(&TokenKind::Is) {
                     self.advance();
-                    let type_annotation = self.arena.alloc(self.parse_union_type()?);
+                    let parsed_type = self.parse_union_type()?;
+                    let type_annotation = self.alloc(parsed_type);
                     let end_span = type_annotation.span;
                     return Ok(Type {
                         kind: TypeKind::TypePredicate(crate::ast::types::TypePredicate {
@@ -42,7 +43,7 @@ impl<'a, 'arena> TypeParser<'arena> for Parser<'a, 'arena> {
 
 impl<'a, 'arena> Parser<'a, 'arena> {
     #[inline]
-    fn parse_union_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_union_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let mut types = vec![self.parse_intersection_type()?];
 
         while self.match_token(&[TokenKind::Pipe]) {
@@ -54,7 +55,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         } else {
             let start_span = types.first().unwrap().span;
             let end_span = types.last().unwrap().span;
-            let types = self.arena.alloc_slice_fill_iter(types.into_iter());
+            let types = self.alloc_vec(types);
             Ok(Type {
                 kind: TypeKind::Union(types),
                 span: start_span.combine(&end_span),
@@ -63,7 +64,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_intersection_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_intersection_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let mut types = vec![self.parse_conditional_type()?];
 
         while self.match_token(&[TokenKind::Ampersand]) {
@@ -75,7 +76,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         } else {
             let start_span = types.first().unwrap().span;
             let end_span = types.last().unwrap().span;
-            let types = self.arena.alloc_slice_fill_iter(types.into_iter());
+            let types = self.alloc_vec(types);
             Ok(Type {
                 kind: TypeKind::Intersection(types),
                 span: start_span.combine(&end_span),
@@ -84,7 +85,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_conditional_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_conditional_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let check_type = self.parse_postfix_type()?;
 
         // Check for conditional type: T extends U ? X : Y
@@ -102,10 +103,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
             return Ok(Type {
                 kind: TypeKind::Conditional(ConditionalType {
-                    check_type: self.arena.alloc(check_type),
-                    extends_type: self.arena.alloc(extends_type),
-                    true_type: self.arena.alloc(true_type),
-                    false_type: self.arena.alloc(false_type),
+                    check_type: self.alloc(check_type),
+                    extends_type: self.alloc(extends_type),
+                    true_type: self.alloc(true_type),
+                    false_type: self.alloc(false_type),
                     span: start_span.combine(&end_span),
                 }),
                 span: start_span.combine(&end_span),
@@ -116,7 +117,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_postfix_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_postfix_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let mut ty = self.parse_primary_type()?;
 
         loop {
@@ -128,7 +129,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         let end_span = self.current_span();
                         let start_span = ty.span;
                         ty = Type {
-                            kind: TypeKind::Array(self.arena.alloc(ty)),
+                            kind: TypeKind::Array(self.alloc(ty)),
                             span: start_span.combine(&end_span),
                         };
                     } else {
@@ -138,7 +139,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         let end_span = self.current_span();
                         let start_span = ty.span;
                         ty = Type {
-                            kind: TypeKind::IndexAccess(self.arena.alloc(ty), self.arena.alloc(index)),
+                            kind: TypeKind::IndexAccess(self.alloc(ty), self.alloc(index)),
                             span: start_span.combine(&end_span),
                         };
                     }
@@ -149,7 +150,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let end_span = self.current_span();
                     let start_span = ty.span;
                     ty = Type {
-                        kind: TypeKind::Nullable(self.arena.alloc(ty)),
+                        kind: TypeKind::Nullable(self.alloc(ty)),
                         span: start_span.combine(&end_span),
                     };
                 }
@@ -161,7 +162,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_primary_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_primary_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let start_span = self.current_span();
 
         match &self.current().kind.clone() {
@@ -262,7 +263,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let operand = self.parse_primary_type()?;
                 let end_span = operand.span;
                 Ok(Type {
-                    kind: TypeKind::KeyOf(self.arena.alloc(operand)),
+                    kind: TypeKind::KeyOf(self.alloc(operand)),
                     span: start_span.combine(&end_span),
                 })
             }
@@ -282,7 +283,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
                 let end_span = self.current_span();
                 Ok(Type {
-                    kind: TypeKind::TypeQuery(self.arena.alloc(expr)),
+                    kind: TypeKind::TypeQuery(self.alloc(expr)),
                     span: start_span.combine(&end_span),
                 })
             }
@@ -329,7 +330,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let inner_type = self.parse_postfix_type()?;
                 let end_span = inner_type.span;
                 Ok(Type {
-                    kind: TypeKind::Variadic(self.arena.alloc(inner_type)),
+                    kind: TypeKind::Variadic(self.alloc(inner_type)),
                     span: start_span.combine(&end_span),
                 })
             }
@@ -342,7 +343,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
     }
 
-    fn parse_object_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_object_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBrace, "Expected '{'")?;
 
@@ -435,7 +436,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBrace, "Expected '}' after object type")?;
 
-        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+        let members = self.alloc_vec(members);
         Ok(Type {
             kind: TypeKind::Object(ObjectType {
                 members,
@@ -445,7 +446,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_mapped_type(&mut self, start_span: Span) -> Result<Type, ParserError> {
+    fn parse_mapped_type(&mut self, start_span: Span) -> Result<Type<'arena>, ParserError> {
         use crate::ast::types::{MappedType, MappedTypeModifier};
 
         // Check for readonly modifier before the bracket: readonly [K in T]
@@ -524,10 +525,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(Type {
             kind: TypeKind::Mapped(MappedType {
                 readonly_modifier,
-                type_parameter: self.arena.alloc(type_parameter),
-                in_type: self.arena.alloc(in_type),
+                type_parameter: self.alloc(type_parameter),
+                in_type: self.alloc(in_type),
                 optional_modifier,
-                value_type: self.arena.alloc(value_type),
+                value_type: self.alloc(value_type),
                 span: start_span.combine(&end_span),
             }),
             span: start_span.combine(&end_span),
@@ -557,11 +558,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let parts = self.arena.alloc_slice_fill_iter(parts.into_iter());
+        let parts = self.alloc_vec(parts);
         Ok(parts)
     }
 
-    fn parse_tuple_type(&mut self) -> Result<Type, ParserError> {
+    fn parse_tuple_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
 
@@ -580,7 +581,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBracket, "Expected ']' after tuple type")?;
 
-        let types = self.arena.alloc_slice_fill_iter(types.into_iter());
+        let types = self.alloc_vec(types);
         Ok(Type {
             kind: TypeKind::Tuple(types),
             span: start_span.combine(&end_span),
@@ -588,12 +589,12 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     /// Try to parse a function type, but return an error if it's not a function type
-    fn try_parse_function_type(&mut self) -> Result<Type, ParserError> {
+    fn try_parse_function_type(&mut self) -> Result<Type<'arena>, ParserError> {
         let checkpoint = self.position;
         let start_span = self.current_span();
 
         // Try to parse as function type, but rewind on any error
-        let result = (|| -> Result<Type, ParserError> {
+        let result = (|| -> Result<Type<'arena>, ParserError> {
             self.consume(TokenKind::LeftParen, "Expected '('")?;
             let parameters = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')'")?;
@@ -610,7 +611,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             if !self.match_token(&[TokenKind::Arrow]) {
                 self.consume(TokenKind::FatArrow, "Expected '->' or '=>'")?;
             }
-            let return_type = self.arena.alloc(self.parse_type()?);
+            let parsed_return = self.parse_type()?;
+            let return_type = self.alloc(parsed_return);
             let end_span = return_type.span;
 
             Ok(Type {
@@ -636,7 +638,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     /// Parse a tuple type using parentheses: (T, U, V)
-    fn parse_tuple_type_with_parens(&mut self) -> Result<Type, ParserError> {
+    fn parse_tuple_type_with_parens(&mut self) -> Result<Type<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftParen, "Expected '('")?;
 
@@ -656,11 +658,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         // If there's only one type and no comma, it's a parenthesized type, not a tuple
         if types.len() == 1 {
             Ok(Type {
-                kind: TypeKind::Parenthesized(self.arena.alloc(types.into_iter().next().unwrap())),
+                kind: TypeKind::Parenthesized(self.alloc(types.into_iter().next().unwrap())),
                 span: start_span.combine(&end_span),
             })
         } else {
-            let types = self.arena.alloc_slice_fill_iter(types.into_iter());
+            let types = self.alloc_vec(types);
             Ok(Type {
                 kind: TypeKind::Tuple(types),
                 span: start_span.combine(&end_span),
@@ -679,7 +681,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let args = self.arena.alloc_slice_fill_iter(args.into_iter());
+        let args = self.alloc_vec(args);
         Ok(args)
     }
 }
@@ -1124,7 +1126,7 @@ mod tests {
         let result = parse_type("nil");
         assert!(result.is_ok());
         // nil token is parsed as a literal nil type
-        let (ty, _arena) = result.unwrap();
+        let ty = result.unwrap();
         match ty.kind {
             TypeKind::Literal(Literal::Nil) => {}
             TypeKind::Primitive(PrimitiveType::Nil) => {}

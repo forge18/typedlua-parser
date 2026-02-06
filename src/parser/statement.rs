@@ -62,7 +62,7 @@ impl<'a, 'arena> StatementParser<'arena> for Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_block(&mut self) -> Result<Block, ParserError> {
+    fn parse_block(&mut self) -> Result<Block<'arena>, ParserError> {
         let start_span = self.current_span();
         let mut statements = Vec::with_capacity(4);
 
@@ -85,7 +85,7 @@ impl<'a, 'arena> StatementParser<'arena> for Parser<'a, 'arena> {
             start_span
         };
 
-        let statements = self.arena.alloc_slice_fill_iter(statements.into_iter());
+        let statements = self.alloc_vec(statements);
 
         Ok(Block {
             statements,
@@ -138,7 +138,7 @@ impl<'arena> Spannable for Statement<'arena> {
 
 // Statement implementations
 impl<'a, 'arena> Parser<'a, 'arena> {
-    fn parse_label_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_label_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::ColonColon, "Expected '::'")?;
         let name = self.parse_identifier()?;
@@ -151,7 +151,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_goto_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_goto_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Goto, "Expected 'goto'")?;
         let target = self.parse_identifier()?;
@@ -164,7 +164,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_variable_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_variable_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         let kind = if matches!(self.current().kind, TokenKind::Const) {
             VariableKind::Const
@@ -209,7 +209,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    fn parse_function_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_function_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Function, "Expected 'function'")?;
 
@@ -248,7 +248,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             } else {
                 error_types.push(self.parse_type()?);
             }
-            let error_types = self.arena.alloc_slice_fill_iter(error_types.into_iter());
+            let error_types = self.alloc_vec(error_types);
             Some(error_types)
         } else {
             None
@@ -277,7 +277,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_if_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_if_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::If, "Expected 'if'")?;
 
@@ -310,7 +310,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         self.consume(TokenKind::End, "Expected 'end' after if statement")?;
         let end_span = self.current_span();
 
-        let else_ifs = self.arena.alloc_slice_fill_iter(else_ifs.into_iter());
+        let else_ifs = self.alloc_vec(else_ifs);
 
         Ok(Statement::If(IfStatement {
             condition,
@@ -321,7 +321,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_while_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_while_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::While, "Expected 'while'")?;
 
@@ -339,7 +339,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_repeat_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_repeat_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Repeat, "Expected 'repeat'")?;
 
@@ -356,7 +356,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_for_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_for_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::For, "Expected 'for'")?;
 
@@ -379,7 +379,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             self.consume(TokenKind::End, "Expected 'end' after for body")?;
             let end_span = self.current_span();
 
-            Ok(Statement::For(self.arena.alloc(ForStatement::Numeric(self.arena.alloc(
+            Ok(Statement::For(self.alloc(ForStatement::Numeric(self.alloc(
                 ForNumeric {
                     variable: first_var,
                     start,
@@ -409,10 +409,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             self.consume(TokenKind::End, "Expected 'end' after for body")?;
             let end_span = self.current_span();
 
-            let variables = self.arena.alloc_slice_fill_iter(variables.into_iter());
-            let iterators = self.arena.alloc_slice_fill_iter(iterators.into_iter());
+            let variables = self.alloc_vec(variables);
+            let iterators = self.alloc_vec(iterators);
 
-            Ok(Statement::For(self.arena.alloc(ForStatement::Generic(
+            Ok(Statement::For(self.alloc(ForStatement::Generic(
                 ForGeneric {
                     variables,
                     iterators,
@@ -423,7 +423,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
     }
 
-    fn parse_return_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_return_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Return, "Expected 'return'")?;
 
@@ -450,7 +450,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             start_span
         };
 
-        let values = self.arena.alloc_slice_fill_iter(values.into_iter());
+        let values = self.alloc_vec(values);
 
         Ok(Statement::Return(ReturnStatement {
             values,
@@ -458,13 +458,13 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_interface_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_interface_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         self.consume(TokenKind::Interface, "Expected 'interface'")?;
         let interface = self.parse_interface_inner()?;
         Ok(Statement::Interface(interface))
     }
 
-    fn parse_interface_inner(&mut self) -> Result<InterfaceDeclaration, ParserError> {
+    fn parse_interface_inner(&mut self) -> Result<InterfaceDeclaration<'arena>, ParserError> {
         let start_span = self.current_span();
         let name = self.parse_identifier()?;
 
@@ -498,7 +498,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
         let end_span = self.current_span();
 
-        let extends = self.arena.alloc_slice_fill_iter(extends.into_iter());
+        let extends = self.alloc_vec(extends);
 
         Ok(InterfaceDeclaration {
             name,
@@ -579,11 +579,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+        let members = self.alloc_vec(members);
         Ok(members)
     }
 
-    pub(super) fn parse_index_signature(&mut self) -> Result<IndexSignature, ParserError> {
+    pub(super) fn parse_index_signature(&mut self) -> Result<IndexSignature<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::LeftBracket, "Expected '['")?;
 
@@ -661,13 +661,13 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_type_alias_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_type_alias_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         self.consume(TokenKind::Type, "Expected 'type'")?;
         let type_alias = self.parse_type_alias_inner()?;
         Ok(Statement::TypeAlias(type_alias))
     }
 
-    fn parse_type_alias_inner(&mut self) -> Result<TypeAliasDeclaration, ParserError> {
+    fn parse_type_alias_inner(&mut self) -> Result<TypeAliasDeclaration<'arena>, ParserError> {
         let start_span = self.current_span();
         let name = self.parse_identifier()?;
 
@@ -690,7 +690,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_enum_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_enum_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Enum, "Expected 'enum'")?;
 
@@ -797,7 +797,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
                         let member_end = self.current_span();
 
-                        let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                        let arguments = self.alloc_vec(arguments);
                         members.push(EnumMember {
                             name: member_name,
                             arguments,
@@ -908,18 +908,18 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         self.consume(TokenKind::RightBrace, "Expected '}' after enum body")?;
         let end_span = self.current_span();
 
-        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+        let members = self.alloc_vec(members);
         let fields = if is_rich_enum {
-            self.arena.alloc_slice_fill_iter(fields.into_iter())
+            self.alloc_vec(fields)
         } else {
             &[]
         };
         let methods = if is_rich_enum {
-            self.arena.alloc_slice_fill_iter(methods.into_iter())
+            self.alloc_vec(methods)
         } else {
             &[]
         };
-        let implements = self.arena.alloc_slice_fill_iter(implements.into_iter());
+        let implements = self.alloc_vec(implements);
 
         Ok(Statement::Enum(EnumDeclaration {
             name,
@@ -932,7 +932,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_import_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_import_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Import, "Expected 'import'")?;
 
@@ -1042,11 +1042,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let specifiers = self.arena.alloc_slice_fill_iter(specifiers.into_iter());
+        let specifiers = self.alloc_vec(specifiers);
         Ok(specifiers)
     }
 
-    fn parse_export_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_export_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Export, "Expected 'export'")?;
 
@@ -1066,10 +1066,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 TokenKind::Class | TokenKind::Abstract | TokenKind::Final | TokenKind::Function
             ) {
                 let decl = self.parse_statement()?;
-                ExportKind::Declaration(self.arena.alloc(decl))
+                ExportKind::Declaration(self.alloc(decl))
             } else {
                 let expr = self.parse_expression()?;
-                ExportKind::Default(self.arena.alloc(expr))
+                ExportKind::Default(self.alloc(expr))
             }
         } else if self.check(&TokenKind::LeftBrace) {
             self.consume(TokenKind::LeftBrace, "Expected '{'")?;
@@ -1097,7 +1097,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             ExportKind::Named { specifiers, source }
         } else {
             let decl = self.parse_statement()?;
-            ExportKind::Declaration(self.arena.alloc(decl))
+            ExportKind::Declaration(self.alloc(decl))
         };
 
         let end_span = self.current_span();
@@ -1136,11 +1136,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let specifiers = self.arena.alloc_slice_fill_iter(specifiers.into_iter());
+        let specifiers = self.alloc_vec(specifiers);
         Ok(specifiers)
     }
 
-    fn parse_declare_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_declare_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let _start_span = self.current_span();
         self.consume(TokenKind::Declare, "Expected 'declare'")?;
 
@@ -1157,7 +1157,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
     }
 
-    fn parse_declare_function(&mut self) -> Result<Statement, ParserError> {
+    fn parse_declare_function(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Function, "Expected 'function'")?;
 
@@ -1199,7 +1199,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             } else {
                 error_types.push(self.parse_type()?);
             }
-            let error_types = self.arena.alloc_slice_fill_iter(error_types.into_iter());
+            let error_types = self.alloc_vec(error_types);
             Some(error_types)
         } else {
             None
@@ -1218,7 +1218,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_declare_const(&mut self) -> Result<Statement, ParserError> {
+    fn parse_declare_const(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Const, "Expected 'const'")?;
 
@@ -1237,7 +1237,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_declare_namespace(&mut self) -> Result<Statement, ParserError> {
+    fn parse_declare_namespace(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Namespace, "Expected 'namespace'")?;
 
@@ -1282,7 +1282,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         let end_span = self.current_span();
 
-        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+        let members = self.alloc_vec(members);
 
         Ok(Statement::DeclareNamespace(DeclareNamespaceStatement {
             name,
@@ -1291,19 +1291,19 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_declare_type(&mut self) -> Result<Statement, ParserError> {
+    fn parse_declare_type(&mut self) -> Result<Statement<'arena>, ParserError> {
         self.consume(TokenKind::Type, "Expected 'type'")?;
         let type_alias = self.parse_type_alias_inner()?;
         Ok(Statement::DeclareType(type_alias))
     }
 
-    fn parse_declare_interface(&mut self) -> Result<Statement, ParserError> {
+    fn parse_declare_interface(&mut self) -> Result<Statement<'arena>, ParserError> {
         self.consume(TokenKind::Interface, "Expected 'interface'")?;
         let interface = self.parse_interface_inner()?;
         Ok(Statement::DeclareInterface(interface))
     }
 
-    fn parse_class_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_class_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
 
         let decorators = self.parse_decorators()?;
@@ -1359,7 +1359,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     TokenKind::RightParen,
                     "Expected ')' after parent constructor arguments",
                 )?;
-                let args = self.arena.alloc_slice_fill_iter(args.into_iter());
+                let args = self.alloc_vec(args);
                 Some(args)
             } else {
                 None
@@ -1412,8 +1412,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         let end_span = self.current_span();
 
-        let implements = self.arena.alloc_slice_fill_iter(implements.into_iter());
-        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+        let implements = self.alloc_vec(implements);
+        let members = self.alloc_vec(members);
 
         Ok(Statement::Class(ClassDeclaration {
             decorators,
@@ -1430,7 +1430,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_class_member(&mut self) -> Result<ClassMember, ParserError> {
+    fn parse_class_member(&mut self) -> Result<ClassMember<'arena>, ParserError> {
         let decorators = self.parse_decorators()?;
 
         let access = if self.match_token(&[TokenKind::Public]) {
@@ -1583,8 +1583,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
     fn parse_constructor(
         &mut self,
-        decorators: Vec<Decorator>,
-    ) -> Result<ClassMember, ParserError> {
+        decorators: &'arena [Decorator<'arena>],
+    ) -> Result<ClassMember<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Constructor, "Expected 'constructor'")?;
         self.consume(TokenKind::LeftParen, "Expected '('")?;
@@ -1613,10 +1613,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
     fn parse_getter(
         &mut self,
-        decorators: Vec<Decorator>,
+        decorators: &'arena [Decorator<'arena>],
         access: Option<AccessModifier>,
         is_static: bool,
-    ) -> Result<ClassMember, ParserError> {
+    ) -> Result<ClassMember<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Get, "Expected 'get'")?;
         let name = self.parse_identifier()?;
@@ -1650,10 +1650,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
     fn parse_setter(
         &mut self,
-        decorators: Vec<Decorator>,
+        decorators: &'arena [Decorator<'arena>],
         access: Option<AccessModifier>,
         is_static: bool,
-    ) -> Result<ClassMember, ParserError> {
+    ) -> Result<ClassMember<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Set, "Expected 'set'")?;
         let name = self.parse_identifier()?;
@@ -1700,9 +1700,9 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
     fn parse_operator(
         &mut self,
-        decorators: Vec<Decorator>,
+        decorators: &'arena [Decorator<'arena>],
         access: Option<AccessModifier>,
-    ) -> Result<ClassMember, ParserError> {
+    ) -> Result<ClassMember<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Operator, "Expected 'operator'")?;
 
@@ -1720,9 +1720,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             operator = OperatorKind::UnaryMinus;
         }
 
-        let mut parameters = Vec::new();
-
-        if operator == OperatorKind::NewIndex {
+        let parameters: &'arena [Parameter<'arena>] = if operator == OperatorKind::NewIndex {
             self.consume(TokenKind::LeftParen, "Expected '(' after operator")?;
             let params = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')'")?;
@@ -1732,17 +1730,20 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     span: self.current_span(),
                 });
             }
-            parameters = params;
+            params
         } else if self.check(&TokenKind::LeftParen) {
             self.consume(TokenKind::LeftParen, "Expected '(' after operator")?;
             if !self.check(&TokenKind::RightParen) {
                 let params = self.parse_parameter_list()?;
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
-                parameters = params;
+                params
             } else {
                 self.consume(TokenKind::RightParen, "Expected ')'")?;
+                &[]
             }
-        }
+        } else {
+            &[]
+        };
 
         let return_type = if self.match_token(&[TokenKind::Colon]) {
             Some(self.parse_type()?)
@@ -1891,7 +1892,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         Ok(op)
     }
 
-    fn parse_throw_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_throw_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Throw, "Expected 'throw'")?;
 
@@ -1904,14 +1905,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_rethrow_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_rethrow_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Rethrow, "Expected 'rethrow'")?;
 
         Ok(Statement::Rethrow(start_span))
     }
 
-    fn parse_namespace_declaration(&mut self) -> Result<Statement, ParserError> {
+    fn parse_namespace_declaration(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
 
         if self.has_namespace {
@@ -1958,7 +1959,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_try_statement(&mut self) -> Result<Statement, ParserError> {
+    fn parse_try_statement(&mut self) -> Result<Statement<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::Try, "Expected 'try'")?;
 
@@ -2002,7 +2003,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             try_block.span
         };
 
-        let catch_clauses = self.arena.alloc_slice_fill_iter(catch_clauses.into_iter());
+        let catch_clauses = self.alloc_vec(catch_clauses);
 
         Ok(Statement::Try(TryStatement {
             try_block,
@@ -2012,7 +2013,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }))
     }
 
-    fn parse_catch_clause(&mut self) -> Result<CatchClause, ParserError> {
+    fn parse_catch_clause(&mut self) -> Result<CatchClause<'arena>, ParserError> {
         let start_span = self.current_span();
 
         self.consume(TokenKind::LeftParen, "Expected '(' after 'catch'")?;
@@ -2037,7 +2038,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     span: start_span.combine(&span),
                 }
             } else {
-                let type_annotations = self.arena.alloc_slice_fill_iter(type_annotations.into_iter());
+                let type_annotations = self.alloc_vec(type_annotations);
                 CatchPattern::MultiTyped {
                     variable,
                     type_annotations,
@@ -2082,11 +2083,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             decorators.push(self.parse_decorator()?);
         }
 
-        let decorators = self.arena.alloc_slice_fill_iter(decorators.into_iter());
+        let decorators = self.alloc_vec(decorators);
         Ok(decorators)
     }
 
-    fn parse_decorator(&mut self) -> Result<Decorator, ParserError> {
+    fn parse_decorator(&mut self) -> Result<Decorator<'arena>, ParserError> {
         let start_span = self.current_span();
         self.consume(TokenKind::At, "Expected '@'")?;
 
@@ -2099,7 +2100,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_decorator_expression(&mut self) -> Result<DecoratorExpression, ParserError> {
+    fn parse_decorator_expression(&mut self) -> Result<DecoratorExpression<'arena>, ParserError> {
         let start_span = self.current_span();
         let name = self.parse_identifier_or_keyword()?;
 
@@ -2112,7 +2113,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let property = self.parse_identifier_or_keyword()?;
                     let span = start_span.combine(&property.span);
                     expr = DecoratorExpression::Member {
-                        object: self.arena.alloc(expr),
+                        object: self.alloc(expr),
                         property,
                         span,
                     };
@@ -2136,10 +2137,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         "Expected ')' after decorator arguments",
                     )?;
 
-                    let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
+                    let arguments = self.alloc_vec(arguments);
                     let span = start_span.combine(&end_span);
                     expr = DecoratorExpression::Call {
-                        callee: self.arena.alloc(expr),
+                        callee: self.alloc(expr),
                         arguments,
                         span,
                     };
@@ -2242,13 +2243,15 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let name = self.parse_identifier()?;
 
             let constraint = if self.match_token(&[TokenKind::Extends, TokenKind::Implements]) {
-                Some(self.arena.alloc(self.parse_type()?))
+                let parsed_constraint = self.parse_type()?;
+                Some(self.alloc(parsed_constraint))
             } else {
                 None
             };
 
             let default = if self.match_token(&[TokenKind::Equal]) {
-                Some(self.arena.alloc(self.parse_type()?))
+                let parsed_default = self.parse_type()?;
+                Some(self.alloc(parsed_default))
             } else {
                 None
             };
@@ -2269,7 +2272,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         self.consume(TokenKind::GreaterThan, "Expected '>' after type parameters")?;
 
-        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
+        let params = self.alloc_vec(params);
         Ok(params)
     }
 
@@ -2322,7 +2325,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
+        let params = self.alloc_vec(params);
         Ok(params)
     }
 
@@ -2355,7 +2358,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
             // Check if @readonly decorator was used
             if !is_readonly {
-                for dec in &decorators {
+                for dec in decorators {
                     if let crate::ast::statement::DecoratorExpression::Identifier(ident) =
                         &dec.expression
                     {
@@ -2399,7 +2402,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
+        let params = self.alloc_vec(params);
         Ok(params)
     }
 
@@ -2436,7 +2439,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
-        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
+        let params = self.alloc_vec(params);
         Ok(params)
     }
 }
@@ -2607,7 +2610,7 @@ mod tests {
         let result = parse_statement("for i = 1, 10 do end");
         assert!(result.is_ok());
         match result.unwrap() {
-            Statement::For(for_stmt) => match for_stmt.as_ref() {
+            Statement::For(for_stmt) => match for_stmt {
                 ForStatement::Numeric(_) => {}
                 _ => panic!("Expected numeric for"),
             },
@@ -2620,7 +2623,7 @@ mod tests {
         let result = parse_statement("for i = 1, 10, 2 do end");
         assert!(result.is_ok());
         match result.unwrap() {
-            Statement::For(for_stmt) => match for_stmt.as_ref() {
+            Statement::For(for_stmt) => match for_stmt {
                 ForStatement::Numeric(num) => {
                     assert!(num.step.is_some());
                 }
@@ -2635,7 +2638,7 @@ mod tests {
         let result = parse_statement("for k, v in pairs(t) do end");
         assert!(result.is_ok());
         match result.unwrap() {
-            Statement::For(for_stmt) => match for_stmt.as_ref() {
+            Statement::For(for_stmt) => match for_stmt {
                 ForStatement::Generic(gen) => {
                     assert_eq!(gen.variables.len(), 2);
                     assert_eq!(gen.iterators.len(), 1);
