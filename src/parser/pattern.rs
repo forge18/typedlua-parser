@@ -34,6 +34,7 @@ impl Parser<'_> {
                 .unwrap()
                 .span()
                 .combine(&alternatives.last().unwrap().span());
+            let alternatives = self.arena.alloc_slice_fill_iter(alternatives.into_iter());
             Ok(Pattern::Or(OrPattern { alternatives, span }))
         }
     }
