@@ -155,6 +155,7 @@ impl Parser<'_> {
         let end_span = self.current_span();
         self.consume(TokenKind::RightBracket, "Expected ']' after array pattern")?;
 
+        let elements = self.arena.alloc_slice_fill_iter(elements.into_iter());
         Ok(Pattern::Array(ArrayPattern {
             elements,
             span: start_span.combine(&end_span),
