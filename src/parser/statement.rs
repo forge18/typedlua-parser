@@ -85,6 +85,8 @@ impl StatementParser for Parser<'_> {
             start_span
         };
 
+        let statements = self.arena.alloc_slice_fill_iter(statements.into_iter());
+
         Ok(Block {
             statements,
             span: start_span.combine(&end_span),
@@ -246,6 +248,7 @@ impl Parser<'_> {
             } else {
                 error_types.push(self.parse_type()?);
             }
+            let error_types = self.arena.alloc_slice_fill_iter(error_types.into_iter());
             Some(error_types)
         } else {
             None
@@ -306,6 +309,8 @@ impl Parser<'_> {
 
         self.consume(TokenKind::End, "Expected 'end' after if statement")?;
         let end_span = self.current_span();
+
+        let else_ifs = self.arena.alloc_slice_fill_iter(else_ifs.into_iter());
 
         Ok(Statement::If(IfStatement {
             condition,
@@ -374,7 +379,7 @@ impl Parser<'_> {
             self.consume(TokenKind::End, "Expected 'end' after for body")?;
             let end_span = self.current_span();
 
-            Ok(Statement::For(Box::new(ForStatement::Numeric(Box::new(
+            Ok(Statement::For(self.arena.alloc(ForStatement::Numeric(self.arena.alloc(
                 ForNumeric {
                     variable: first_var,
                     start,
@@ -404,7 +409,10 @@ impl Parser<'_> {
             self.consume(TokenKind::End, "Expected 'end' after for body")?;
             let end_span = self.current_span();
 
-            Ok(Statement::For(Box::new(ForStatement::Generic(
+            let variables = self.arena.alloc_slice_fill_iter(variables.into_iter());
+            let iterators = self.arena.alloc_slice_fill_iter(iterators.into_iter());
+
+            Ok(Statement::For(self.arena.alloc(ForStatement::Generic(
                 ForGeneric {
                     variables,
                     iterators,
@@ -441,6 +449,8 @@ impl Parser<'_> {
         } else {
             start_span
         };
+
+        let values = self.arena.alloc_slice_fill_iter(values.into_iter());
 
         Ok(Statement::Return(ReturnStatement {
             values,
@@ -488,6 +498,8 @@ impl Parser<'_> {
         }
         let end_span = self.current_span();
 
+        let extends = self.arena.alloc_slice_fill_iter(extends.into_iter());
+
         Ok(InterfaceDeclaration {
             name,
             type_parameters,
@@ -497,7 +509,7 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_interface_members(&mut self, use_braces: bool) -> Result<Vec<InterfaceMember>, ParserError> {
+    fn parse_interface_members(&mut self, use_braces: bool) -> Result<&'arena [InterfaceMember<'arena>], ParserError> {
         let mut members = Vec::new();
 
         let end_token = if use_braces {
@@ -567,6 +579,7 @@ impl Parser<'_> {
             }
         }
 
+        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
         Ok(members)
     }
 
@@ -784,6 +797,7 @@ impl Parser<'_> {
                         self.consume(TokenKind::RightParen, "Expected ')' after arguments")?;
                         let member_end = self.current_span();
 
+                        let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
                         members.push(EnumMember {
                             name: member_name,
                             arguments,
@@ -823,7 +837,7 @@ impl Parser<'_> {
 
                     members.push(EnumMember {
                         name: member_name,
-                        arguments: Vec::new(),
+                        arguments: &[],
                         value,
                         span: member_start.combine(&member_end),
                     });
@@ -894,12 +908,25 @@ impl Parser<'_> {
         self.consume(TokenKind::RightBrace, "Expected '}' after enum body")?;
         let end_span = self.current_span();
 
+        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+        let fields = if is_rich_enum {
+            self.arena.alloc_slice_fill_iter(fields.into_iter())
+        } else {
+            &[]
+        };
+        let methods = if is_rich_enum {
+            self.arena.alloc_slice_fill_iter(methods.into_iter())
+        } else {
+            &[]
+        };
+        let implements = self.arena.alloc_slice_fill_iter(implements.into_iter());
+
         Ok(Statement::Enum(EnumDeclaration {
             name,
             members,
-            fields: if is_rich_enum { fields } else { Vec::new() },
+            fields,
             constructor: if is_rich_enum { constructor } else { None },
-            methods: if is_rich_enum { methods } else { Vec::new() },
+            methods,
             implements,
             span: start_span.combine(&end_span),
         }))
@@ -987,7 +1014,7 @@ impl Parser<'_> {
         }))
     }
 
-    fn parse_import_specifiers(&mut self) -> Result<Vec<ImportSpecifier>, ParserError> {
+    fn parse_import_specifiers(&mut self) -> Result<&'arena [ImportSpecifier], ParserError> {
         let mut specifiers = Vec::new();
 
         loop {
@@ -1015,6 +1042,7 @@ impl Parser<'_> {
             }
         }
 
+        let specifiers = self.arena.alloc_slice_fill_iter(specifiers.into_iter());
         Ok(specifiers)
     }
 
@@ -1038,10 +1066,10 @@ impl Parser<'_> {
                 TokenKind::Class | TokenKind::Abstract | TokenKind::Final | TokenKind::Function
             ) {
                 let decl = self.parse_statement()?;
-                ExportKind::Declaration(Box::new(decl))
+                ExportKind::Declaration(self.arena.alloc(decl))
             } else {
                 let expr = self.parse_expression()?;
-                ExportKind::Default(Box::new(expr))
+                ExportKind::Default(self.arena.alloc(expr))
             }
         } else if self.check(&TokenKind::LeftBrace) {
             self.consume(TokenKind::LeftBrace, "Expected '{'")?;
@@ -1069,7 +1097,7 @@ impl Parser<'_> {
             ExportKind::Named { specifiers, source }
         } else {
             let decl = self.parse_statement()?;
-            ExportKind::Declaration(Box::new(decl))
+            ExportKind::Declaration(self.arena.alloc(decl))
         };
 
         let end_span = self.current_span();
@@ -1080,7 +1108,7 @@ impl Parser<'_> {
         }))
     }
 
-    fn parse_export_specifiers(&mut self) -> Result<Vec<ExportSpecifier>, ParserError> {
+    fn parse_export_specifiers(&mut self) -> Result<&'arena [ExportSpecifier], ParserError> {
         let mut specifiers = Vec::new();
 
         loop {
@@ -1108,6 +1136,7 @@ impl Parser<'_> {
             }
         }
 
+        let specifiers = self.arena.alloc_slice_fill_iter(specifiers.into_iter());
         Ok(specifiers)
     }
 
@@ -1170,6 +1199,7 @@ impl Parser<'_> {
             } else {
                 error_types.push(self.parse_type()?);
             }
+            let error_types = self.arena.alloc_slice_fill_iter(error_types.into_iter());
             Some(error_types)
         } else {
             None
@@ -1252,6 +1282,8 @@ impl Parser<'_> {
 
         let end_span = self.current_span();
 
+        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
+
         Ok(Statement::DeclareNamespace(DeclareNamespaceStatement {
             name,
             members,
@@ -1327,6 +1359,7 @@ impl Parser<'_> {
                     TokenKind::RightParen,
                     "Expected ')' after parent constructor arguments",
                 )?;
+                let args = self.arena.alloc_slice_fill_iter(args.into_iter());
                 Some(args)
             } else {
                 None
@@ -1378,6 +1411,9 @@ impl Parser<'_> {
         }
 
         let end_span = self.current_span();
+
+        let implements = self.arena.alloc_slice_fill_iter(implements.into_iter());
+        let members = self.arena.alloc_slice_fill_iter(members.into_iter());
 
         Ok(Statement::Class(ClassDeclaration {
             decorators,
@@ -1966,6 +2002,8 @@ impl Parser<'_> {
             try_block.span
         };
 
+        let catch_clauses = self.arena.alloc_slice_fill_iter(catch_clauses.into_iter());
+
         Ok(Statement::Try(TryStatement {
             try_block,
             catch_clauses,
@@ -1999,6 +2037,7 @@ impl Parser<'_> {
                     span: start_span.combine(&span),
                 }
             } else {
+                let type_annotations = self.arena.alloc_slice_fill_iter(type_annotations.into_iter());
                 CatchPattern::MultiTyped {
                     variable,
                     type_annotations,
@@ -2036,13 +2075,14 @@ impl Parser<'_> {
 
     // Helper methods
 
-    fn parse_decorators(&mut self) -> Result<Vec<Decorator>, ParserError> {
+    fn parse_decorators(&mut self) -> Result<&'arena [Decorator<'arena>], ParserError> {
         let mut decorators = Vec::new();
 
         while self.check(&TokenKind::At) {
             decorators.push(self.parse_decorator()?);
         }
 
+        let decorators = self.arena.alloc_slice_fill_iter(decorators.into_iter());
         Ok(decorators)
     }
 
@@ -2072,7 +2112,7 @@ impl Parser<'_> {
                     let property = self.parse_identifier_or_keyword()?;
                     let span = start_span.combine(&property.span);
                     expr = DecoratorExpression::Member {
-                        object: Box::new(expr),
+                        object: self.arena.alloc(expr),
                         property,
                         span,
                     };
@@ -2096,9 +2136,10 @@ impl Parser<'_> {
                         "Expected ')' after decorator arguments",
                     )?;
 
+                    let arguments = self.arena.alloc_slice_fill_iter(arguments.into_iter());
                     let span = start_span.combine(&end_span);
                     expr = DecoratorExpression::Call {
-                        callee: Box::new(expr),
+                        callee: self.arena.alloc(expr),
                         arguments,
                         span,
                     };
@@ -2193,7 +2234,7 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn parse_type_parameters(&mut self) -> Result<Vec<TypeParameter>, ParserError> {
+    pub(super) fn parse_type_parameters(&mut self) -> Result<&'arena [TypeParameter<'arena>], ParserError> {
         let mut params = Vec::new();
 
         loop {
@@ -2201,13 +2242,13 @@ impl Parser<'_> {
             let name = self.parse_identifier()?;
 
             let constraint = if self.match_token(&[TokenKind::Extends, TokenKind::Implements]) {
-                Some(Box::new(self.parse_type()?))
+                Some(self.arena.alloc(self.parse_type()?))
             } else {
                 None
             };
 
             let default = if self.match_token(&[TokenKind::Equal]) {
-                Some(Box::new(self.parse_type()?))
+                Some(self.arena.alloc(self.parse_type()?))
             } else {
                 None
             };
@@ -2228,15 +2269,16 @@ impl Parser<'_> {
 
         self.consume(TokenKind::GreaterThan, "Expected '>' after type parameters")?;
 
+        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
         Ok(params)
     }
 
     #[inline]
-    pub(super) fn parse_parameter_list(&mut self) -> Result<Vec<Parameter>, ParserError> {
+    pub(super) fn parse_parameter_list(&mut self) -> Result<&'arena [Parameter<'arena>], ParserError> {
         let mut params = Vec::with_capacity(4);
 
         if self.check(&TokenKind::RightParen) {
-            return Ok(params);
+            return Ok(&[]);
         }
 
         loop {
@@ -2280,16 +2322,17 @@ impl Parser<'_> {
             }
         }
 
+        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
         Ok(params)
     }
 
     fn parse_primary_constructor_parameters(
         &mut self,
-    ) -> Result<Vec<ConstructorParameter>, ParserError> {
+    ) -> Result<&'arena [ConstructorParameter<'arena>], ParserError> {
         let mut params = Vec::new();
 
         if self.check(&TokenKind::RightParen) {
-            return Ok(params);
+            return Ok(&[]);
         }
 
         loop {
@@ -2356,14 +2399,15 @@ impl Parser<'_> {
             }
         }
 
+        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
         Ok(params)
     }
 
-    fn parse_typed_parameter_list(&mut self) -> Result<Vec<Parameter>, ParserError> {
+    fn parse_typed_parameter_list(&mut self) -> Result<&'arena [Parameter<'arena>], ParserError> {
         let mut params = Vec::new();
 
         if self.check(&TokenKind::RightParen) {
-            return Ok(params);
+            return Ok(&[]);
         }
 
         loop {
@@ -2392,6 +2436,7 @@ impl Parser<'_> {
             }
         }
 
+        let params = self.arena.alloc_slice_fill_iter(params.into_iter());
         Ok(params)
     }
 }

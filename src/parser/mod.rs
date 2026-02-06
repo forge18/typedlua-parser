@@ -8,6 +8,7 @@ use crate::diagnostics::{error_codes, DiagnosticHandler};
 use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
 use crate::string_interner::{CommonIdentifiers, StringInterner};
+use bumpalo::Bump;
 use std::sync::Arc;
 
 pub use expression::ExpressionParser;
@@ -29,22 +30,24 @@ impl std::fmt::Display for ParserError {
 
 impl std::error::Error for ParserError {}
 
-pub struct Parser<'a> {
+pub struct Parser<'a, 'arena> {
     tokens: Vec<Token>,
     position: usize,
     diagnostic_handler: Arc<dyn DiagnosticHandler>,
     interner: &'a StringInterner,
     common: &'a CommonIdentifiers,
+    arena: &'arena Bump,
     has_namespace: bool,
     is_first_statement: bool,
 }
 
-impl<'a> Parser<'a> {
+impl<'a, 'arena> Parser<'a, 'arena> {
     pub fn new(
         tokens: Vec<Token>,
         diagnostic_handler: Arc<dyn DiagnosticHandler>,
         interner: &'a StringInterner,
         common: &'a CommonIdentifiers,
+        arena: &'arena Bump,
     ) -> Self {
         Parser {
             tokens,
@@ -52,9 +55,15 @@ impl<'a> Parser<'a> {
             diagnostic_handler,
             interner,
             common,
+            arena,
             has_namespace: false,
             is_first_statement: true,
         }
+    }
+
+    /// Get reference to the arena allocator
+    pub fn arena(&self) -> &'arena Bump {
+        self.arena
     }
 
     /// Get reference to the string interner
@@ -72,7 +81,7 @@ impl<'a> Parser<'a> {
         self.interner.resolve(id)
     }
 
-    pub fn parse(&mut self) -> Result<Program, ParserError> {
+    pub fn parse(&mut self) -> Result<Program<'arena>, ParserError> {
         let start_span = self.current_span();
         let mut statements = Vec::new();
         self.is_first_statement = true;
@@ -97,7 +106,10 @@ impl<'a> Parser<'a> {
             start_span
         };
 
-        Ok(Program::new(statements, start_span.combine(&end_span)))
+        // Allocate the statements vector as a slice in the arena
+        let statements_slice = self.arena.alloc_slice_fill_iter(statements.into_iter());
+
+        Ok(Program::new(statements_slice, start_span.combine(&end_span)))
     }
 
     // Token stream management
@@ -252,7 +264,7 @@ trait Spannable {
     fn span(&self) -> Span;
 }
 
-impl Spannable for crate::ast::statement::Statement {
+impl<'arena> Spannable for crate::ast::statement::Statement<'arena> {
     fn span(&self) -> Span {
         use crate::ast::statement::Statement::*;
         match self {
@@ -266,7 +278,7 @@ impl Spannable for crate::ast::statement::Statement {
             Export(e) => e.span,
             If(i) => i.span,
             While(w) => w.span,
-            For(f) => match f.as_ref() {
+            For(f) => match f {
                 crate::ast::statement::ForStatement::Numeric(n) => n.span,
                 crate::ast::statement::ForStatement::Generic(g) => g.span,
             },
@@ -299,11 +311,12 @@ mod tests {
     use std::sync::Arc;
 
     fn parse_program(source: &str) -> (Program, Arc<CollectingDiagnosticHandler>) {
+        let arena = Bump::new();
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
         let tokens = lexer.tokenize().expect("Failed to tokenize");
-        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let program = parser.parse().expect("Failed to parse");
         (program, handler)
     }
@@ -531,11 +544,12 @@ mod tests {
 
     #[test]
     fn test_parser_has_namespace_tracking() {
+        let arena = Bump::new();
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new("namespace Foo;", handler.clone(), &interner);
         let tokens = lexer.tokenize().expect("Failed to tokenize");
-        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
 
         // Initially has_namespace should be false
         assert!(!parser.has_namespace);
@@ -547,11 +561,12 @@ mod tests {
 
     #[test]
     fn test_parser_is_first_statement_tracking() {
+        let arena = Bump::new();
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new("local x = 1\nlocal y = 2", handler.clone(), &interner);
         let tokens = lexer.tokenize().expect("Failed to tokenize");
-        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
 
         // Parse first statement
         let _ = parser.parse();
@@ -600,10 +615,11 @@ mod tests {
 
     #[test]
     fn test_parser_report_error_break_outside_loop() {
+        let arena = Bump::new();
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("break outside loop", span);
         let diags = handler.get_diagnostics();
@@ -616,7 +632,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("continue outside loop", span);
         let diags = handler.get_diagnostics();
@@ -629,7 +646,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Expected 'end'", span);
         let diags = handler.get_diagnostics();
@@ -642,7 +660,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Expected 'then'", span);
         let diags = handler.get_diagnostics();
@@ -655,7 +674,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Expected 'do' in while loop", span);
         let diags = handler.get_diagnostics();
@@ -668,7 +688,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Expected identifier", span);
         let diags = handler.get_diagnostics();
@@ -681,7 +702,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Expected expression", span);
         let diags = handler.get_diagnostics();
@@ -694,7 +716,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Unexpected token", span);
         let diags = handler.get_diagnostics();
@@ -707,7 +730,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Expected token", span);
         let diags = handler.get_diagnostics();
@@ -720,7 +744,8 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common);
+        let arena = Bump::new();
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
         let span = Span::new(0, 5, 1, 1);
         parser.report_error("Some random error", span);
         let diags = handler.get_diagnostics();
