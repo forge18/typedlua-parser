@@ -5,22 +5,23 @@ use serde::{Deserialize, Serialize};
 
 use super::statement::{Block, Parameter};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Expression {
-    pub kind: ExpressionKind,
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Expression<'arena> {
+    pub kind: ExpressionKind<'arena>,
     pub span: Span,
-    pub annotated_type: Option<Type>,
+    #[serde(borrow)]
+    pub annotated_type: Option<Type<'arena>>,
     pub receiver_class: Option<ReceiverClassInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReceiverClassInfo {
     pub class_name: StringId,
     pub is_static: bool,
 }
 
-impl Expression {
-    pub fn new(kind: ExpressionKind, span: Span) -> Self {
+impl<'arena> Expression<'arena> {
+    pub fn new(kind: ExpressionKind<'arena>, span: Span) -> Self {
         Expression {
             kind,
             span,
@@ -30,40 +31,40 @@ impl Expression {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub enum ExpressionKind {
+#[derive(Debug, Clone, Default, Serialize)]
+pub enum ExpressionKind<'arena> {
     Identifier(StringId),
     Literal(Literal),
-    Binary(BinaryOp, Box<Expression>, Box<Expression>),
-    Unary(UnaryOp, Box<Expression>),
-    Assignment(Box<Expression>, AssignmentOp, Box<Expression>),
-    Member(Box<Expression>, Ident),
-    Index(Box<Expression>, Box<Expression>),
-    Call(Box<Expression>, Vec<Argument>, Option<Vec<Type>>),
-    MethodCall(Box<Expression>, Ident, Vec<Argument>, Option<Vec<Type>>),
-    Array(Vec<ArrayElement>),
-    Object(Vec<ObjectProperty>),
-    Function(FunctionExpression),
-    Arrow(ArrowFunction),
-    Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
-    Pipe(Box<Expression>, Box<Expression>),
-    Match(MatchExpression),
-    Parenthesized(Box<Expression>),
+    Binary(BinaryOp, &'arena Expression<'arena>, &'arena Expression<'arena>),
+    Unary(UnaryOp, &'arena Expression<'arena>),
+    Assignment(&'arena Expression<'arena>, AssignmentOp, &'arena Expression<'arena>),
+    Member(&'arena Expression<'arena>, Ident),
+    Index(&'arena Expression<'arena>, &'arena Expression<'arena>),
+    Call(&'arena Expression<'arena>, &'arena [Argument<'arena>], Option<&'arena [Type<'arena>]>),
+    MethodCall(&'arena Expression<'arena>, Ident, &'arena [Argument<'arena>], Option<&'arena [Type<'arena>]>),
+    Array(&'arena [ArrayElement<'arena>]),
+    Object(&'arena [ObjectProperty<'arena>]),
+    Function(FunctionExpression<'arena>),
+    Arrow(ArrowFunction<'arena>),
+    Conditional(&'arena Expression<'arena>, &'arena Expression<'arena>, &'arena Expression<'arena>),
+    Pipe(&'arena Expression<'arena>, &'arena Expression<'arena>),
+    Match(MatchExpression<'arena>),
+    Parenthesized(&'arena Expression<'arena>),
     #[default]
     SelfKeyword,
     SuperKeyword,
-    Template(TemplateLiteral),
-    TypeAssertion(Box<Expression>, Type),
-    New(Box<Expression>, Vec<Argument>, Option<Vec<Type>>),
-    OptionalMember(Box<Expression>, Ident),
-    OptionalIndex(Box<Expression>, Box<Expression>),
-    OptionalCall(Box<Expression>, Vec<Argument>, Option<Vec<Type>>),
-    OptionalMethodCall(Box<Expression>, Ident, Vec<Argument>, Option<Vec<Type>>),
-    Try(TryExpression),
-    ErrorChain(Box<Expression>, Box<Expression>),
+    Template(TemplateLiteral<'arena>),
+    TypeAssertion(&'arena Expression<'arena>, Type<'arena>),
+    New(&'arena Expression<'arena>, &'arena [Argument<'arena>], Option<&'arena [Type<'arena>]>),
+    OptionalMember(&'arena Expression<'arena>, Ident),
+    OptionalIndex(&'arena Expression<'arena>, &'arena Expression<'arena>),
+    OptionalCall(&'arena Expression<'arena>, &'arena [Argument<'arena>], Option<&'arena [Type<'arena>]>),
+    OptionalMethodCall(&'arena Expression<'arena>, Ident, &'arena [Argument<'arena>], Option<&'arena [Type<'arena>]>),
+    Try(TryExpression<'arena>),
+    ErrorChain(&'arena Expression<'arena>, &'arena Expression<'arena>),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Literal {
     Nil,
     Boolean(bool),
@@ -72,7 +73,7 @@ pub enum Literal {
     String(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum BinaryOp {
     Add,
     Subtract,
@@ -99,7 +100,7 @@ pub enum BinaryOp {
     Instanceof,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum UnaryOp {
     Not,
     Negate,
@@ -107,7 +108,7 @@ pub enum UnaryOp {
     BitwiseNot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum AssignmentOp {
     Assign,            // =
     AddAssign,         // +=
@@ -124,97 +125,124 @@ pub enum AssignmentOp {
     RightShiftAssign,  // >>=
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Argument {
-    pub value: Expression,
+#[derive(Debug, Clone, Serialize)]
+pub struct Argument<'arena> {
+    #[serde(borrow)]
+    pub value: Expression<'arena>,
     pub is_spread: bool,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArrayElement {
-    Expression(Expression),
-    Spread(Expression),
+#[derive(Debug, Clone, Serialize)]
+pub enum ArrayElement<'arena> {
+    #[serde(borrow)]
+    Expression(Expression<'arena>),
+    #[serde(borrow)]
+    Spread(Expression<'arena>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ObjectProperty {
+#[derive(Debug, Clone, Serialize)]
+pub enum ObjectProperty<'arena> {
     Property {
         key: Ident,
-        value: Box<Expression>,
+        #[serde(borrow)]
+        value: &'arena Expression<'arena>,
         span: Span,
     },
     Computed {
-        key: Box<Expression>,
-        value: Box<Expression>,
+        #[serde(borrow)]
+        key: &'arena Expression<'arena>,
+        #[serde(borrow)]
+        value: &'arena Expression<'arena>,
         span: Span,
     },
     Spread {
-        value: Box<Expression>,
+        #[serde(borrow)]
+        value: &'arena Expression<'arena>,
         span: Span,
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionExpression {
-    pub type_parameters: Option<Vec<TypeParameter>>,
-    pub parameters: Vec<Parameter>,
-    pub return_type: Option<Type>,
-    pub body: Block,
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionExpression<'arena> {
+    #[serde(borrow)]
+    pub type_parameters: Option<&'arena [TypeParameter<'arena>]>,
+    #[serde(borrow)]
+    pub parameters: &'arena [Parameter<'arena>],
+    #[serde(borrow)]
+    pub return_type: Option<Type<'arena>>,
+    #[serde(borrow)]
+    pub body: Block<'arena>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArrowFunction {
-    pub parameters: Vec<Parameter>,
-    pub return_type: Option<Type>,
-    pub body: ArrowBody,
+#[derive(Debug, Clone, Serialize)]
+pub struct ArrowFunction<'arena> {
+    #[serde(borrow)]
+    pub parameters: &'arena [Parameter<'arena>],
+    #[serde(borrow)]
+    pub return_type: Option<Type<'arena>>,
+    #[serde(borrow)]
+    pub body: ArrowBody<'arena>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArrowBody {
-    Expression(Box<Expression>),
-    Block(Block),
+#[derive(Debug, Clone, Serialize)]
+pub enum ArrowBody<'arena> {
+    #[serde(borrow)]
+    Expression(&'arena Expression<'arena>),
+    #[serde(borrow)]
+    Block(Block<'arena>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchExpression {
-    pub value: Box<Expression>,
-    pub arms: Vec<MatchArm>,
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchExpression<'arena> {
+    #[serde(borrow)]
+    pub value: &'arena Expression<'arena>,
+    #[serde(borrow)]
+    pub arms: &'arena [MatchArm<'arena>],
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchArm {
-    pub pattern: Pattern,
-    pub guard: Option<Expression>,
-    pub body: MatchArmBody,
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchArm<'arena> {
+    #[serde(borrow)]
+    pub pattern: Pattern<'arena>,
+    #[serde(borrow)]
+    pub guard: Option<Expression<'arena>>,
+    #[serde(borrow)]
+    pub body: MatchArmBody<'arena>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MatchArmBody {
-    Expression(Box<Expression>),
-    Block(Block),
+#[derive(Debug, Clone, Serialize)]
+pub enum MatchArmBody<'arena> {
+    #[serde(borrow)]
+    Expression(&'arena Expression<'arena>),
+    #[serde(borrow)]
+    Block(Block<'arena>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateLiteral {
-    pub parts: Vec<TemplatePart>,
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateLiteral<'arena> {
+    #[serde(borrow)]
+    pub parts: &'arena [TemplatePart<'arena>],
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TemplatePart {
+#[derive(Debug, Clone, Serialize)]
+pub enum TemplatePart<'arena> {
     String(String),
-    Expression(Box<Expression>),
+    #[serde(borrow)]
+    Expression(&'arena Expression<'arena>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TryExpression {
-    pub expression: Box<Expression>,
+#[derive(Debug, Clone, Serialize)]
+pub struct TryExpression<'arena> {
+    #[serde(borrow)]
+    pub expression: &'arena Expression<'arena>,
     pub catch_variable: Ident,
-    pub catch_expression: Box<Expression>,
+    #[serde(borrow)]
+    pub catch_expression: &'arena Expression<'arena>,
     pub span: Span,
 }

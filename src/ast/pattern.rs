@@ -2,50 +2,59 @@ use super::{expression::Expression, expression::Literal, Ident};
 use crate::span::Span;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Pattern {
+#[derive(Debug, Clone, Serialize)]
+pub enum Pattern<'arena> {
     Identifier(Ident),
     Literal(Literal, Span),
-    Array(ArrayPattern),
-    Object(ObjectPattern),
+    #[serde(borrow)]
+    Array(ArrayPattern<'arena>),
+    #[serde(borrow)]
+    Object(ObjectPattern<'arena>),
     Wildcard(Span),
-    Or(OrPattern),
+    #[serde(borrow)]
+    Or(OrPattern<'arena>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrPattern {
-    pub alternatives: Vec<Pattern>,
+#[derive(Debug, Clone, Serialize)]
+pub struct OrPattern<'arena> {
+    #[serde(borrow)]
+    pub alternatives: &'arena [Pattern<'arena>],
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArrayPattern {
-    pub elements: Vec<ArrayPatternElement>,
+#[derive(Debug, Clone, Serialize)]
+pub struct ArrayPattern<'arena> {
+    #[serde(borrow)]
+    pub elements: &'arena [ArrayPatternElement<'arena>],
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArrayPatternElement {
-    Pattern(Pattern),
+#[derive(Debug, Clone, Serialize)]
+pub enum ArrayPatternElement<'arena> {
+    #[serde(borrow)]
+    Pattern(Pattern<'arena>),
     Rest(Ident),
     Hole,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObjectPattern {
-    pub properties: Vec<ObjectPatternProperty>,
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjectPattern<'arena> {
+    #[serde(borrow)]
+    pub properties: &'arena [ObjectPatternProperty<'arena>],
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObjectPatternProperty {
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjectPatternProperty<'arena> {
     pub key: Ident,
-    pub value: Option<Pattern>,
-    pub default: Option<Expression>,
+    #[serde(borrow)]
+    pub value: Option<Pattern<'arena>>,
+    #[serde(borrow)]
+    pub default: Option<Expression<'arena>>,
     pub span: Span,
 }
 
-impl Pattern {
+impl<'arena> Pattern<'arena> {
     pub fn span(&self) -> Span {
         match self {
             Pattern::Identifier(id) => id.span,
