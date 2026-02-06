@@ -472,11 +472,20 @@ impl Parser<'_> {
             }
         }
 
-        self.consume(TokenKind::LeftBrace, "Expected '{' after interface header")?;
+        // Support both { } braces and Lua-style end syntax
+        let use_braces = self.check(&TokenKind::LeftBrace);
 
-        let members = self.parse_interface_members()?;
+        if use_braces {
+            self.consume(TokenKind::LeftBrace, "Expected '{' after interface header")?;
+        }
 
-        self.consume(TokenKind::RightBrace, "Expected '}' after interface body")?;
+        let members = self.parse_interface_members(use_braces)?;
+
+        if use_braces {
+            self.consume(TokenKind::RightBrace, "Expected '}' after interface body")?;
+        } else {
+            self.consume(TokenKind::End, "Expected 'end' after interface body")?;
+        }
         let end_span = self.current_span();
 
         Ok(InterfaceDeclaration {
@@ -488,10 +497,16 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_interface_members(&mut self) -> Result<Vec<InterfaceMember>, ParserError> {
+    fn parse_interface_members(&mut self, use_braces: bool) -> Result<Vec<InterfaceMember>, ParserError> {
         let mut members = Vec::new();
 
-        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+        let end_token = if use_braces {
+            TokenKind::RightBrace
+        } else {
+            TokenKind::End
+        };
+
+        while !self.check(&end_token) && !self.is_at_end() {
             if self.check(&TokenKind::LeftBracket) {
                 members.push(InterfaceMember::Index(self.parse_index_signature()?));
             } else {
