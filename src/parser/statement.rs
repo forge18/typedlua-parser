@@ -360,6 +360,35 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let start_span = self.current_span();
         self.consume(TokenKind::For, "Expected 'for'")?;
 
+        // Check for destructuring pattern: for [a, b] in ... or for { x, y } in ...
+        if self.check(&TokenKind::LeftBracket) || self.check(&TokenKind::LeftBrace) {
+            let pattern = self.parse_pattern()?;
+
+            self.consume(TokenKind::In, "Expected 'in' in for loop")?;
+
+            let mut iterators = vec![self.parse_expression()?];
+            while self.match_token(&[TokenKind::Comma]) {
+                iterators.push(self.parse_expression()?);
+            }
+
+            self.consume(TokenKind::Do, "Expected 'do' after for iterators")?;
+            let body = self.parse_block()?;
+            self.consume(TokenKind::End, "Expected 'end' after for body")?;
+            let end_span = self.current_span();
+
+            let iterators = self.alloc_vec(iterators);
+
+            return Ok(Statement::For(self.alloc(ForStatement::Generic(
+                ForGeneric {
+                    variables: &[],
+                    pattern: Some(pattern),
+                    iterators,
+                    body,
+                    span: start_span.combine(&end_span),
+                },
+            ))));
+        }
+
         let first_var = self.parse_identifier()?;
 
         if self.match_token(&[TokenKind::Equal]) {
@@ -415,6 +444,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             Ok(Statement::For(self.alloc(ForStatement::Generic(
                 ForGeneric {
                     variables,
+                    pattern: None,
                     iterators,
                     body,
                     span: start_span.combine(&end_span),

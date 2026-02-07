@@ -529,6 +529,8 @@ pub struct ForGeneric<'arena> {
     #[serde(borrow)]
     pub variables: &'arena [Ident],
     #[serde(borrow)]
+    pub pattern: Option<super::pattern::Pattern<'arena>>,
+    #[serde(borrow)]
     pub iterators: &'arena [Expression<'arena>],
     #[serde(borrow)]
     pub body: Block<'arena>,
