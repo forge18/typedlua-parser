@@ -32,15 +32,24 @@ pub struct ArrayPattern<'arena> {
 #[derive(Debug, Clone, Serialize)]
 pub enum ArrayPatternElement<'arena> {
     #[serde(borrow)]
-    Pattern(Pattern<'arena>),
+    Pattern(PatternWithDefault<'arena>),
     Rest(Ident),
     Hole,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PatternWithDefault<'arena> {
+    #[serde(borrow)]
+    pub pattern: Pattern<'arena>,
+    #[serde(borrow)]
+    pub default: Option<Expression<'arena>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ObjectPattern<'arena> {
     #[serde(borrow)]
     pub properties: &'arena [ObjectPatternProperty<'arena>],
+    pub rest: Option<Ident>,
     pub span: Span,
 }
 

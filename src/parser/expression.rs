@@ -766,19 +766,28 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 });
             } else {
                 let key = self.parse_identifier()?;
-                if !self.match_token(&[TokenKind::Equal, TokenKind::Colon]) {
-                    return Err(ParserError {
-                        message: "Expected '=' or ':' after property key".to_string(),
-                        span: self.current_span(),
+                if self.match_token(&[TokenKind::Equal, TokenKind::Colon]) {
+                    let value = self.parse_expression()?;
+                    let span = key.span.combine(&value.span);
+                    properties.push(ObjectProperty::Property {
+                        key,
+                        value: self.alloc(value),
+                        span,
+                    });
+                } else {
+                    // Shorthand property: { x } means { x: x }
+                    let value = Expression {
+                        kind: ExpressionKind::Identifier(key.node),
+                        span: key.span,
+                        ..Default::default()
+                    };
+                    let span = key.span;
+                    properties.push(ObjectProperty::Property {
+                        key,
+                        value: self.alloc(value),
+                        span,
                     });
                 }
-                let value = self.parse_expression()?;
-                let span = key.span.combine(&value.span);
-                properties.push(ObjectProperty::Property {
-                    key,
-                    value: self.alloc(value),
-                    span,
-                });
             }
 
             if !self.check(&TokenKind::RightBrace) {

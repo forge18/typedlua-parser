@@ -139,9 +139,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 elements.push(ArrayPatternElement::Hole);
                 continue;
             } else {
-                // Regular pattern
+                // Regular pattern with optional default value
                 let pattern = self.parse_pattern()?;
-                elements.push(ArrayPatternElement::Pattern(pattern));
+                let default = if self.match_token(&[TokenKind::Equal]) {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                elements.push(ArrayPatternElement::Pattern(PatternWithDefault { pattern, default }));
             }
 
             if !self.check(&TokenKind::RightBracket) {
@@ -167,8 +172,67 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         self.consume(TokenKind::LeftBrace, "Expected '{'")?;
 
         let mut properties = Vec::new();
+        let mut rest = None;
 
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            // Check for rest pattern: ...name
+            if self.match_token(&[TokenKind::DotDotDot]) {
+                let name = match &self.current().kind {
+                    TokenKind::Identifier(s) => {
+                        let span = self.current_span();
+                        let ident = Spanned::new(*s, span);
+                        self.advance();
+                        ident
+                    }
+                    _ => {
+                        return Err(ParserError {
+                            message: "Expected identifier after '...'".to_string(),
+                            span: self.current_span(),
+                        })
+                    }
+                };
+                rest = Some(name);
+                // Consume trailing comma if present
+                if self.check(&TokenKind::Comma) {
+                    self.advance();
+                }
+                break;
+            }
+
+            // Check for computed property: [expr]: pattern
+            if self.check(&TokenKind::LeftBracket) {
+                self.advance();
+                let _key_expr = self.parse_expression()?;
+                self.consume(TokenKind::RightBracket, "Expected ']' after computed key")?;
+                self.consume(TokenKind::Colon, "Expected ':' after computed key")?;
+                let value_pattern = self.parse_pattern()?;
+                let default = if self.match_token(&[TokenKind::Equal]) {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+
+                // Store computed key with a placeholder key identifier
+                let key_str = format!("__computed_{}", properties.len());
+                let key_id = self.interner.intern(&key_str);
+                let key_ident = Spanned::new(key_id, _key_expr.span);
+
+                properties.push(ObjectPatternProperty {
+                    key: key_ident,
+                    value: Some(value_pattern),
+                    default,
+                    span: _key_expr.span,
+                });
+
+                if !self.check(&TokenKind::RightBrace) {
+                    self.consume(
+                        TokenKind::Comma,
+                        "Expected ',' between object pattern properties",
+                    )?;
+                }
+                continue;
+            }
+
             let key = match &self.current().kind {
                 TokenKind::Identifier(s) => {
                     let span = self.current_span();
@@ -225,6 +289,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let properties = self.alloc_vec(properties);
         Ok(Pattern::Object(ObjectPattern {
             properties,
+            rest,
             span: start_span.combine(&end_span),
         }))
     }
