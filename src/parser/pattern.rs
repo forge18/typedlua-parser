@@ -1,4 +1,5 @@
 use super::{ExpressionParser, Parser, ParserError};
+use super::types::TypeParser;
 use crate::ast::expression::Literal;
 use crate::ast::pattern::*;
 use crate::ast::Spanned;
@@ -139,8 +140,12 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 elements.push(ArrayPatternElement::Hole);
                 continue;
             } else {
-                // Regular pattern with optional default value
+                // Regular pattern with optional type annotation and default value
                 let pattern = self.parse_pattern()?;
+                // Consume optional type annotation: a: number
+                if self.match_token(&[TokenKind::Colon]) {
+                    let _type_ann = self.parse_type()?;
+                }
                 let default = if self.match_token(&[TokenKind::Equal]) {
                     Some(self.parse_expression()?)
                 } else {
@@ -202,7 +207,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             // Check for computed property: [expr]: pattern
             if self.check(&TokenKind::LeftBracket) {
                 self.advance();
-                let _key_expr = self.parse_expression()?;
+                let key_expr = self.parse_expression()?;
                 self.consume(TokenKind::RightBracket, "Expected ']' after computed key")?;
                 self.consume(TokenKind::Colon, "Expected ':' after computed key")?;
                 let value_pattern = self.parse_pattern()?;
@@ -215,13 +220,15 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 // Store computed key with a placeholder key identifier
                 let key_str = format!("__computed_{}", properties.len());
                 let key_id = self.interner.intern(&key_str);
-                let key_ident = Spanned::new(key_id, _key_expr.span);
+                let prop_span = key_expr.span;
+                let key_ident = Spanned::new(key_id, prop_span);
 
                 properties.push(ObjectPatternProperty {
                     key: key_ident,
+                    computed_key: Some(key_expr),
                     value: Some(value_pattern),
                     default,
-                    span: _key_expr.span,
+                    span: prop_span,
                 });
 
                 if !self.check(&TokenKind::RightBrace) {
@@ -270,6 +277,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
             properties.push(ObjectPatternProperty {
                 key,
+                computed_key: None,
                 value,
                 default,
                 span,

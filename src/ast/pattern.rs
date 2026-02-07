@@ -57,6 +57,8 @@ pub struct ObjectPattern<'arena> {
 pub struct ObjectPatternProperty<'arena> {
     pub key: Ident,
     #[serde(borrow)]
+    pub computed_key: Option<Expression<'arena>>,
+    #[serde(borrow)]
     pub value: Option<Pattern<'arena>>,
     #[serde(borrow)]
     pub default: Option<Expression<'arena>>,
