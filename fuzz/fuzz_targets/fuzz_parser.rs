@@ -1,14 +1,14 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use typedlua_parser::lexer::Lexer;
-use typedlua_parser::parser::Parser;
-use typedlua_parser::string_interner::StringInterner;
+use luanext_parser::lexer::Lexer;
+use luanext_parser::parser::Parser;
+use luanext_parser::string_interner::StringInterner;
 
 struct NoOpDiagnosticHandler;
 
-impl typedlua_parser::diagnostic::DiagnosticHandler for NoOpDiagnosticHandler {
-    fn report(&self, _diagnostic: typedlua_parser::diagnostic::Diagnostic) {
+impl luanext_parser::diagnostic::DiagnosticHandler for NoOpDiagnosticHandler {
+    fn report(&self, _diagnostic: luanext_parser::diagnostic::Diagnostic) {
         // Ignore diagnostics for fuzzing
     }
 }

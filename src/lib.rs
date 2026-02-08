@@ -16,8 +16,8 @@
 //! # Example
 //!
 //! ```
-//! use typedlua_parser::prelude::*;
-//! use typedlua_parser::{DiContainer, ServiceLifetime, Bump};
+//! use luanext_parser::prelude::*;
+//! use luanext_parser::{DiContainer, ServiceLifetime, Bump};
 //! use std::sync::Arc;
 //!
 //! let source = r#"
@@ -93,7 +93,7 @@ pub mod prelude {
 /// # Example
 ///
 /// ```
-/// use typedlua_parser::{parse_with_container, DiContainer, ServiceLifetime, CollectingDiagnosticHandler, DiagnosticHandler, Bump};
+/// use luanext_parser::{parse_with_container, DiContainer, ServiceLifetime, CollectingDiagnosticHandler, DiagnosticHandler, Bump};
 /// use std::sync::Arc;
 ///
 /// let source = "const x: number = 42";

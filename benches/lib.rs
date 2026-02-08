@@ -2,13 +2,13 @@
 
 use criterion::{black_box, Criterion};
 use std::sync::Arc;
-use typedlua_parser::{lexer::Lexer, parser::Parser, string_interner::StringInterner};
+use luanext_parser::{lexer::Lexer, parser::Parser, string_interner::StringInterner};
 
 /// Simple no-op diagnostic handler for benchmarks
 struct NoOpDiagnosticHandler;
 
-impl typedlua_parser::diagnostics::DiagnosticHandler for NoOpDiagnosticHandler {
-    fn report(&self, _diagnostic: typedlua_parser::diagnostics::Diagnostic) {
+impl luanext_parser::diagnostics::DiagnosticHandler for NoOpDiagnosticHandler {
+    fn report(&self, _diagnostic: luanext_parser::diagnostics::Diagnostic) {
         // Ignore diagnostics for benchmarking
     }
 
@@ -24,7 +24,7 @@ impl typedlua_parser::diagnostics::DiagnosticHandler for NoOpDiagnosticHandler {
         0
     }
 
-    fn get_diagnostics(&self) -> Vec<typedlua_parser::diagnostics::Diagnostic> {
+    fn get_diagnostics(&self) -> Vec<luanext_parser::diagnostics::Diagnostic> {
         Vec::new()
     }
 }
@@ -137,13 +137,13 @@ pub fn bench_lexer(c: &mut Criterion, name: &str, input: String) {
         b.iter(|| {
             let mut lexer = Lexer::new(
                 black_box(&input),
-                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                Arc::clone(&handler) as Arc<dyn luanext_parser::diagnostics::DiagnosticHandler>,
                 &interner,
             );
             let tokens = lexer.tokenize().unwrap_or_default();
             let mut parser = Parser::new(
                 tokens,
-                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                Arc::clone(&handler) as Arc<dyn luanext_parser::diagnostics::DiagnosticHandler>,
                 &interner,
                 &common,
             );
@@ -161,13 +161,13 @@ pub fn bench_parser(c: &mut Criterion, name: &str, input: String) {
         b.iter(|| {
             let mut lexer = Lexer::new(
                 black_box(&input),
-                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                Arc::clone(&handler) as Arc<dyn luanext_parser::diagnostics::DiagnosticHandler>,
                 &interner,
             );
             let tokens = lexer.tokenize().unwrap_or_default();
             let mut parser = Parser::new(
                 tokens,
-                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                Arc::clone(&handler) as Arc<dyn luanext_parser::diagnostics::DiagnosticHandler>,
                 &interner,
                 &common,
             );
@@ -185,13 +185,13 @@ pub fn bench_full(c: &mut Criterion, name: &str, input: String) {
         b.iter(|| {
             let mut lexer = Lexer::new(
                 black_box(&input),
-                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                Arc::clone(&handler) as Arc<dyn luanext_parser::diagnostics::DiagnosticHandler>,
                 &interner,
             );
             let tokens = lexer.tokenize().unwrap_or_default();
             let mut parser = Parser::new(
                 tokens,
-                Arc::clone(&handler) as Arc<dyn typedlua_parser::diagnostics::DiagnosticHandler>,
+                Arc::clone(&handler) as Arc<dyn luanext_parser::diagnostics::DiagnosticHandler>,
                 &interner,
                 &common,
             );

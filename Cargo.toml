@@ -1,14 +1,14 @@
 [workspace]
 
 [package]
-name = "typedlua-parser"
+name = "luanext-parser"
 version = "0.1.0"
 edition = "2021"
-description = "Lexer, parser, and AST for TypedLua - a typed superset of Lua"
-documentation = "https://github.com/typedlua/typedlua"
-repository = "https://github.com/typedlua/typedlua"
+description = "Lexer, parser, and AST for LuaNext - a typed superset of Lua"
+documentation = "https://github.com/forge18/luanext-parser"
+repository = "https://github.com/forge18/luanext-parser"
 license = "MIT"
-keywords = ["lua", "typedlua", "parser", "compiler", "lexer"]
+keywords = ["lua", "luanext", "parser", "compiler", "lexer"]
 categories = ["development-tools", "parsing"]
 
 [dependencies]
