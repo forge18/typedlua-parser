@@ -5,7 +5,7 @@ use super::{
     Ident,
 };
 use crate::span::Span;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Type<'arena> {
@@ -61,7 +61,7 @@ pub enum TypeKind<'arena> {
     Namespace(Vec<String>),       // File-based namespace type
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrimitiveType {
     Nil,
     Boolean,

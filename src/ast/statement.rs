@@ -1,6 +1,6 @@
 use super::{expression::Expression, pattern::Pattern, types::Type, Ident};
 use crate::span::Span;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 pub enum Statement<'arena> {
@@ -329,7 +329,7 @@ pub struct IndexSignature<'arena> {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndexKeyType {
     String,
     Number,
