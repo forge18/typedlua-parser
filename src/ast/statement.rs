@@ -114,6 +114,9 @@ pub struct ClassDeclaration<'arena> {
     pub implements: &'arena [Type<'arena>],
     #[serde(borrow)]
     pub members: &'arena [ClassMember<'arena>],
+    /// True if this is a forward declaration (no members, used for mutual references)
+    #[serde(default)]
+    pub is_forward_declaration: bool,
     pub span: Span,
 }
 
@@ -283,6 +286,9 @@ pub struct InterfaceDeclaration<'arena> {
     pub extends: &'arena [Type<'arena>],
     #[serde(borrow)]
     pub members: &'arena [InterfaceMember<'arena>],
+    /// True if this is a forward declaration (no members, used for mutual references)
+    #[serde(default)]
+    pub is_forward_declaration: bool,
     pub span: Span,
 }
 

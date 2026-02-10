@@ -530,11 +530,15 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         let extends = self.alloc_vec(extends);
 
+        // Forward declaration: interface with no members
+        let is_forward_declaration = members.is_empty();
+
         Ok(InterfaceDeclaration {
             name,
             type_parameters,
             extends,
             members,
+            is_forward_declaration,
             span: start_span.combine(&end_span),
         })
     }
@@ -1445,6 +1449,19 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let implements = self.alloc_vec(implements);
         let members = self.alloc_vec(members);
 
+        // Forward declaration: class with no members, no constructor, no inheritance, no implements,
+        // no modifiers (abstract/final), and no decorators
+        // Note: Must have an explicit `end` or `}` with nothing in between to be a forward declaration
+        // A class with implements clause, type parameters, modifiers, or decorators is not a
+        // forward declaration even if empty
+        let is_forward_declaration = members.is_empty()
+            && primary_constructor.is_none()
+            && extends.is_none()
+            && implements.is_empty()
+            && !is_abstract
+            && !is_final
+            && decorators.is_empty();
+
         Ok(Statement::Class(ClassDeclaration {
             decorators,
             is_abstract,
@@ -1456,6 +1473,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             parent_constructor_args,
             implements,
             members,
+            is_forward_declaration,
             span: start_span.combine(&end_span),
         }))
     }
