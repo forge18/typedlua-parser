@@ -1084,6 +1084,14 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let start_span = self.current_span();
         self.consume(TokenKind::Export, "Expected 'export'")?;
 
+        // Check for 'export type' modifier
+        let is_type_only = if self.check(&TokenKind::Type) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         let is_default = match &self.current().kind {
             TokenKind::Identifier(s) if self.resolve(*s) == "default" => {
                 self.advance();
@@ -1104,6 +1112,29 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             } else {
                 let expr = self.parse_expression()?;
                 ExportKind::Default(self.alloc(expr))
+            }
+        } else if self.check(&TokenKind::Star) {
+            // export * from './module' or export type * from './module'
+            self.consume(TokenKind::Star, "Expected '*'")?;
+            self.consume(TokenKind::From, "Expected 'from'")?;
+
+            let source = match &self.current().kind {
+                TokenKind::String(s) => {
+                    let source_string = s.clone();
+                    self.advance();
+                    source_string
+                }
+                _ => {
+                    return Err(ParserError {
+                        message: "Expected string literal after 'from'".to_string(),
+                        span: self.current_span(),
+                    });
+                }
+            };
+
+            ExportKind::All {
+                source,
+                is_type_only,
             }
         } else if self.check(&TokenKind::LeftBrace) {
             self.consume(TokenKind::LeftBrace, "Expected '{'")?;

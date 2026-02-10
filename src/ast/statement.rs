@@ -459,6 +459,10 @@ pub enum ExportKind<'arena> {
     },
     #[serde(borrow)]
     Default(&'arena Expression<'arena>),
+    All {
+        source: String,
+        is_type_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
