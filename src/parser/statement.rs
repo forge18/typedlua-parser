@@ -1159,7 +1159,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 None
             };
 
-            ExportKind::Named { specifiers, source }
+            ExportKind::Named {
+                specifiers,
+                source,
+                is_type_only,
+            }
         } else {
             let decl = self.parse_statement()?;
             ExportKind::Declaration(self.alloc(decl))

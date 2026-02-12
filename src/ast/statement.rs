@@ -456,6 +456,7 @@ pub enum ExportKind<'arena> {
         #[serde(borrow)]
         specifiers: &'arena [ExportSpecifier],
         source: Option<String>,
+        is_type_only: bool,
     },
     #[serde(borrow)]
     Default(&'arena Expression<'arena>),
