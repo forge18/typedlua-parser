@@ -36,3 +36,7 @@ harness = false
 [[bench]]
 name = "full"
 harness = false
+
+[[bench]]
+name = "incremental_bench"
+harness = false

@@ -142,6 +142,205 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         ))
     }
 
+    /// Incremental parse using cached statements from previous parse
+    ///
+    /// # Safety
+    /// Uses `unsafe transmute` to cast lifetimes (pattern from module_phase.rs:47-51)
+    ///
+    /// # Arguments
+    /// * `prev_tree` - Previous parse tree (None for first parse)
+    /// * `edits` - Text edits since last parse
+    /// * `source` - Current source text
+    pub fn parse_incremental(
+        &mut self,
+        prev_tree: Option<&crate::incremental::IncrementalParseTree<'static>>,
+        edits: &[crate::incremental::TextEdit],
+        source: &str,
+    ) -> Result<(Program<'arena>, crate::incremental::IncrementalParseTree<'arena>), ParserError> {
+        use crate::incremental::is_statement_clean;
+
+        // Fast path: No previous tree, do full parse
+        let Some(prev_tree) = prev_tree else {
+            let prog = self.parse()?;
+            let arena_arc = Arc::new(Bump::new());
+
+            // Cache tokens for each statement
+            let cached_statements: Vec<_> = prog.statements.iter().map(|stmt| {
+                let span = crate::incremental::get_statement_span(stmt);
+                let stmt_tokens: Vec<_> = self.tokens.iter()
+                    .filter(|t| t.span.start >= span.start && t.span.end <= span.end)
+                    .cloned()
+                    .collect();
+                crate::incremental::CachedStatement::new(stmt, source, 0, stmt_tokens)
+            }).collect();
+
+            let source_hash = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                source.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            let tree = crate::incremental::IncrementalParseTree {
+                version: 1,
+                statements: cached_statements,
+                source_hash,
+                arenas: vec![arena_arc],
+            };
+            return Ok((prog, tree));
+        };
+
+        // Fast path: No edits, reuse entire tree
+        if edits.is_empty() && prev_tree.source_matches(source) {
+            // Clone statement values (cheap, they're just references to arena data)
+            let statement_values: Vec<_> = prev_tree.statements
+                .iter()
+                .map(|cached| cached.statement.clone())
+                .collect();
+
+            let statements_slice = self.alloc_vec(statement_values);
+
+            let new_tree = crate::incremental::IncrementalParseTree {
+                version: prev_tree.version + 1,
+                statements: prev_tree.statements.clone(),
+                source_hash: prev_tree.source_hash,
+                arenas: prev_tree.arenas.clone(),
+            };
+
+            let prog = Program::new(
+                statements_slice,
+                statements_slice.first().map(|s| s.span()).unwrap_or_else(|| Span::new(0, 0, 0, 0))
+            );
+
+            return Ok((prog, new_tree));
+        }
+
+        // Incremental path: Separate clean from dirty statements
+        let mut clean_statements = Vec::new();
+        let mut dirty_ranges = Vec::new();
+
+        for (idx, cached) in prev_tree.statements.iter().enumerate() {
+            if is_statement_clean(cached.statement, edits) && cached.is_valid(source) {
+                // Safe to reuse this statement
+                clean_statements.push((idx, cached));
+            } else {
+                // Need to re-parse this region
+                dirty_ranges.push((idx, cached.byte_range));
+            }
+        }
+
+        // If all statements are dirty, fall back to full parse
+        if clean_statements.is_empty() {
+            let prog = self.parse()?;
+            let arena_arc = Arc::new(Bump::new());
+            let tree = crate::incremental::IncrementalParseTree::new(
+                prev_tree.version + 1,
+                prog.statements,
+                source,
+                arena_arc,
+            );
+            return Ok((prog, tree));
+        }
+
+        // Build new statement list: mix of cached + newly parsed
+        let mut all_statements: Vec<crate::ast::statement::Statement<'arena>> = Vec::new();
+        let new_arena = Arc::new(Bump::new());
+        let next_generation = prev_tree.arenas.len();
+
+        // Re-parse dirty regions
+        let mut dirty_idx = 0;
+        for (stmt_idx, cached) in prev_tree.statements.iter().enumerate() {
+            if clean_statements.iter().any(|(idx, _)| *idx == stmt_idx) {
+                // Reuse clean statement (clone the value, which is cheap)
+                all_statements.push(cached.statement.clone());
+            } else {
+                // Parse dirty region
+                if dirty_idx < dirty_ranges.len() && dirty_ranges[dirty_idx].0 == stmt_idx {
+                    let byte_offset = dirty_ranges[dirty_idx].1.0 as usize;
+                    if let Ok(stmt) = self.parse_statement_at_offset(byte_offset) {
+                        all_statements.push(stmt);
+                    }
+                    dirty_idx += 1;
+                }
+            }
+        }
+
+        // Build new incremental tree
+        let statements_slice = self.alloc_vec(all_statements);
+        let prog = Program::new(
+            statements_slice,
+            statements_slice.first().map(|s| s.span()).unwrap_or_else(|| Span::new(0, 0, 0, 0)),
+        );
+
+        // Build new cached statements - need to allocate statement refs in arena
+        let stmt_refs: Vec<&'arena crate::ast::statement::Statement<'arena>> = statements_slice.iter().collect();
+
+        let new_cached: Vec<crate::incremental::CachedStatement<'arena>> = stmt_refs
+            .iter()
+            .enumerate()
+            .map(|(idx, stmt_ref)| {
+                // Check if this was reused or newly parsed
+                let (arena_gen, tokens) = if let Some((clean_idx, _)) = clean_statements.iter().find(|(clean_idx, _)| *clean_idx == idx) {
+                    // Reused statement keeps its original generation and tokens
+                    (prev_tree.statements[*clean_idx].arena_generation, prev_tree.statements[*clean_idx].tokens.clone())
+                } else {
+                    // Newly parsed statement gets new generation
+                    // Extract tokens for this statement's span
+                    let span = crate::incremental::get_statement_span(stmt_ref);
+                    let stmt_tokens: Vec<_> = self.tokens.iter()
+                        .filter(|t| t.span.start >= span.start && t.span.end <= span.end)
+                        .cloned()
+                        .collect();
+                    (next_generation, stmt_tokens)
+                };
+
+                crate::incremental::CachedStatement::new(
+                    stmt_ref,
+                    source,
+                    arena_gen,
+                    tokens,
+                )
+            })
+            .collect();
+
+        // Combine arenas: old arenas + new arena
+        let mut new_arenas = prev_tree.arenas.clone();
+        new_arenas.push(new_arena);
+
+        let mut tree = crate::incremental::IncrementalParseTree {
+            version: prev_tree.version + 1,
+            statements: new_cached,
+            source_hash: prev_tree.source_hash,
+            arenas: new_arenas,
+        };
+
+        // Run GC to prevent arena accumulation
+        tree.collect_garbage();
+
+        Ok((prog, tree))
+    }
+
+    /// Parse a single statement at a specific byte offset
+    ///
+    /// Seeks the parser position to the correct token and parses a statement
+    fn parse_statement_at_offset(
+        &mut self,
+        byte_offset: usize,
+    ) -> Result<crate::ast::statement::Statement<'arena>, ParserError> {
+        // Find the first token at or after the byte offset
+        let target_position = self.tokens
+            .iter()
+            .position(|t| t.span.start >= byte_offset as u32)
+            .unwrap_or(self.tokens.len().saturating_sub(1));
+
+        // Seek parser to that position
+        self.position = target_position;
+
+        // Parse statement from this position
+        self.parse_statement()
+    }
+
     // Token stream management
     #[inline(always)]
     fn current(&self) -> &Token {

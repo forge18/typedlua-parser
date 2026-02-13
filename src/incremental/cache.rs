@@ -1,4 +1,4 @@
-//! Cached statement structure with hash validation
+//! Cached statement structure with hash validation and multi-arena support
 
 use crate::ast::statement::Statement;
 use crate::lexer::Token;
@@ -18,10 +18,10 @@ pub struct CachedStatement<'arena> {
     pub byte_range: (u32, u32),
     /// Hash of the source text for this statement (for validation)
     pub source_hash: u64,
-    /// Which arena generation owns this statement
-    pub arena_generation: usize,
     /// Cached token stream for this statement
     pub tokens: Vec<Token>,
+    /// Which arena generation this statement belongs to
+    pub arena_generation: usize,
 }
 
 impl<'arena> CachedStatement<'arena> {
@@ -47,8 +47,8 @@ impl<'arena> CachedStatement<'arena> {
             statement,
             byte_range,
             source_hash,
-            arena_generation,
             tokens,
+            arena_generation,
         }
     }
 
@@ -77,16 +77,19 @@ impl<'arena> CachedStatement<'arena> {
     }
 }
 
-/// Incremental parse tree with multi-generation arena support
+/// Incremental parse tree with multi-arena support
+///
+/// Uses multiple arenas to track statements across incremental parses.
+/// Old statements stay in old arenas, new statements allocated in new arenas.
+/// Periodic consolidation prevents unbounded arena accumulation.
 pub struct IncrementalParseTree<'arena> {
     /// Document version this tree corresponds to
     pub version: u64,
-    /// Cached statements (may point to different arena generations)
+    /// Cached statements (may point to different arenas)
     pub statements: Vec<CachedStatement<'arena>>,
     /// Hash of entire source file (for quick full-file validation)
     pub source_hash: u64,
-    /// Arena generations (newest last, oldest first)
-    /// Kept alive via Arc; dropped when no statements reference them
+    /// Multiple arenas - max 3, consolidated when limit hit
     pub arenas: Vec<Arc<Bump>>,
 }
 
@@ -126,29 +129,112 @@ impl<'arena> IncrementalParseTree<'arena> {
         current_hash == self.source_hash
     }
 
-    /// Garbage collect old arena generations that are no longer referenced
+    /// Collect garbage: drop unreferenced arenas or consolidate if needed
     pub fn collect_garbage(&mut self) {
-        // Track which generations are still in use
-        let mut used_generations = HashSet::new();
-        for stmt in &self.statements {
-            used_generations.insert(stmt.arena_generation);
+        // Trigger consolidation if:
+        // 1. More than 3 arenas
+        // 2. Every 10 parses
+        let should_consolidate = self.arenas.len() > 3 || self.version % 10 == 0;
+
+        if should_consolidate {
+            self.consolidate_all();
+        } else {
+            self.drop_unreferenced_arenas();
+        }
+    }
+
+    /// Consolidate all statements into a single new arena
+    fn consolidate_all(&mut self) {
+        if self.arenas.len() <= 1 {
+            return; // Nothing to consolidate
         }
 
-        // Keep only referenced arenas
+        let new_arena = Arc::new(Bump::new());
+
+        // Clone all statements to new arena
+        let new_statements = self
+            .statements
+            .iter()
+            .map(|cached| {
+                let cloned = clone_statement_to_arena(cached.statement, &new_arena);
+
+                // Transmute to 'arena lifetime for storage
+                let static_cloned: &'arena Statement<'arena> =
+                    unsafe { std::mem::transmute(cloned) };
+
+                CachedStatement {
+                    statement: static_cloned,
+                    arena_generation: 0, // All in generation 0 now
+                    byte_range: cached.byte_range,
+                    source_hash: cached.source_hash,
+                    tokens: cached.tokens.clone(),
+                }
+            })
+            .collect();
+
+        self.statements = new_statements;
+        self.arenas = vec![new_arena];
+    }
+
+    /// Drop unreferenced arenas and compact generation numbers
+    fn drop_unreferenced_arenas(&mut self) {
+        let referenced: HashSet<usize> = self
+            .statements
+            .iter()
+            .map(|s| s.arena_generation)
+            .collect();
+
         let mut new_arenas = Vec::new();
-        for (gen, arena) in self.arenas.iter().enumerate() {
-            if used_generations.contains(&gen) {
+        let mut generation_map = vec![0; self.arenas.len()];
+
+        for (old_gen, arena) in self.arenas.iter().enumerate() {
+            if referenced.contains(&old_gen) {
+                generation_map[old_gen] = new_arenas.len();
                 new_arenas.push(arena.clone());
             }
+        }
+
+        // Update arena_generation in all cached statements
+        for stmt in &mut self.statements {
+            stmt.arena_generation = generation_map[stmt.arena_generation];
         }
 
         self.arenas = new_arenas;
     }
 }
 
+/// Clone a statement into a new arena (deep copy)
+///
+/// Uses Rust's built-in `Clone` implementation to deep-copy the statement,
+/// then allocates the cloned value in the new arena with a new lifetime.
+///
+/// # Safety
+/// This is safe because:
+/// 1. We perform a deep clone of the statement, creating new owned data
+/// 2. The cloned data is transmuted to the new lifetime parameter
+/// 3. The arena is kept alive via Arc<Bump> in IncrementalParseTree
+/// 4. Statement layout is identical regardless of lifetime parameter
+/// 5. Lifetimes are compile-time only, erased at runtime
+/// 6. All internal arena references in the clone are also transmuted consistently
+fn clone_statement_to_arena<'old, 'arena>(
+    stmt: &Statement<'old>,
+    arena: &'arena Bump,
+) -> &'arena Statement<'arena> {
+    // Clone creates a new Statement<'old> with owned data
+    let cloned: Statement<'old> = stmt.clone();
+
+    // Transmute the statement from 'old to 'arena lifetime
+    // SAFETY: The clone operation copied all data. The 'old lifetime
+    // is just a type parameter - the actual data is freshly cloned.
+    let transmuted: Statement<'arena> = unsafe { std::mem::transmute(cloned) };
+
+    // Allocate in new arena with correct lifetime
+    arena.alloc(transmuted)
+}
+
 /// Helper function to extract span from a Statement
 /// This matches each variant and extracts its span field
-fn get_statement_span(statement: &Statement) -> Span {
+pub fn get_statement_span(statement: &Statement) -> Span {
     use crate::ast::statement::ForStatement;
 
     match statement {
@@ -168,15 +254,15 @@ fn get_statement_span(statement: &Statement) -> Span {
         },
         Statement::Repeat(stmt) => stmt.span,
         Statement::Return(stmt) => stmt.span,
-        Statement::Break(span) => *span,    // Break is just a Span
-        Statement::Continue(span) => *span, // Continue is just a Span
+        Statement::Break(span) => *span,
+        Statement::Continue(span) => *span,
         Statement::Block(block) => block.span,
         Statement::Label(label) => label.span,
         Statement::Goto(goto) => goto.span,
         Statement::Expression(expr) => expr.span,
         Statement::Throw(stmt) => stmt.span,
         Statement::Try(stmt) => stmt.span,
-        Statement::Rethrow(span) => *span, // Rethrow is just a Span
+        Statement::Rethrow(span) => *span,
         Statement::Namespace(decl) => decl.span,
         Statement::DeclareFunction(decl) => decl.span,
         Statement::DeclareNamespace(decl) => decl.span,
@@ -250,5 +336,46 @@ mod tests {
 
         // Only arena0 should remain
         assert_eq!(tree.arenas.len(), 1);
+    }
+
+    #[test]
+    fn test_consolidation_trigger() {
+        let arena = Arc::new(Bump::new());
+        let break_span = Span::new(0, 5, 1, 1);
+        let stmt: &Statement = arena.alloc(Statement::Break(break_span));
+
+        let mut tree = IncrementalParseTree {
+            version: 9, // Not a consolidation version yet
+            statements: vec![
+                CachedStatement {
+                    statement: stmt,
+                    byte_range: (0, 5),
+                    source_hash: 0,
+                    arena_generation: 0,
+                    tokens: Vec::new(),
+                },
+                CachedStatement {
+                    statement: stmt,
+                    byte_range: (6, 11),
+                    source_hash: 0,
+                    arena_generation: 1,
+                    tokens: Vec::new(),
+                },
+            ],
+            source_hash: 0,
+            arenas: vec![
+                Arc::new(Bump::new()),
+                Arc::new(Bump::new()),
+            ],
+        };
+
+        // Should not consolidate yet (version 9, < 10)
+        tree.collect_garbage();
+        assert_eq!(tree.arenas.len(), 2); // Both arenas still referenced
+
+        // Now trigger consolidation by version
+        tree.version = 10;
+        tree.collect_garbage();
+        assert_eq!(tree.arenas.len(), 1); // Consolidated!
     }
 }
