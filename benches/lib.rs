@@ -1,8 +1,8 @@
 // Shared benchmark utilities for typedlua-parser
 
 use criterion::{black_box, Criterion};
-use std::sync::Arc;
 use luanext_parser::{lexer::Lexer, parser::Parser, string_interner::StringInterner};
+use std::sync::Arc;
 
 /// Simple no-op diagnostic handler for benchmarks
 struct NoOpDiagnosticHandler;

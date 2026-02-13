@@ -551,7 +551,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 crate::lexer::TemplatePart::Expression(tokens) => {
                     // Parse the expression as a type
                     let handler = self.diagnostic_handler.clone();
-                    let mut temp_parser = Parser::new(tokens, handler, self.interner, self.common, self.arena);
+                    let mut temp_parser =
+                        Parser::new(tokens, handler, self.interner, self.common, self.arena);
                     let typ = temp_parser.parse_type()?;
                     parts.push(TemplateLiteralTypePart::Type(typ));
                 }

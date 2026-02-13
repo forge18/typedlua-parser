@@ -90,7 +90,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     #[inline]
     fn alloc_vec<T>(&self, vec: Vec<T>) -> &'arena [T] {
         // SAFETY: Bump::alloc_slice_fill_iter only needs &Bump, not &mut Bump.
-        self.arena.alloc_slice_fill_iter(vec.into_iter())
+        self.arena.alloc_slice_fill_iter(vec)
     }
 
     /// Get reference to the string interner
@@ -136,7 +136,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         // Allocate the statements vector as a slice in the arena
         let statements_slice = self.alloc_vec(statements);
 
-        Ok(Program::new(statements_slice, start_span.combine(&end_span)))
+        Ok(Program::new(
+            statements_slice,
+            start_span.combine(&end_span),
+        ))
     }
 
     // Token stream management

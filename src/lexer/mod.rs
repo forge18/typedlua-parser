@@ -40,6 +40,103 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Convert byte offset to char index in source
+    /// Returns None if byte_offset is out of bounds or mid-character
+    fn byte_to_char_index(&self, byte_offset: u32) -> Option<usize> {
+        let mut byte_count = 0u32;
+        for (char_idx, ch) in self.source.iter().enumerate() {
+            if byte_count == byte_offset {
+                return Some(char_idx);
+            }
+            byte_count += ch.len_utf8() as u32;
+            if byte_count > byte_offset {
+                // byte_offset is in the middle of a multi-byte char
+                return None;
+            }
+        }
+        if byte_count == byte_offset {
+            Some(self.source.len())
+        } else {
+            None
+        }
+    }
+
+    /// Synchronize lexer position to a byte offset
+    /// Calculates line and column by scanning from start of source
+    /// Returns true if successful, false if byte_offset is invalid
+    pub fn sync_position(&mut self, byte_offset: u32) -> bool {
+        let char_idx = match self.byte_to_char_index(byte_offset) {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        // Scan from start to calculate line/column
+        let mut line = 1u32;
+        let mut column = 1u32;
+
+        for i in 0..char_idx {
+            if self.source[i] == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+
+        self.position = char_idx as u32;
+        self.line = line;
+        self.column = column;
+
+        true
+    }
+
+    /// Create a lexer starting at a specific byte offset
+    ///
+    /// # Arguments
+    /// * `source` - Full source text (need access to entire source for line/column calculation)
+    /// * `diagnostic_handler` - Handler for lexer errors
+    /// * `interner` - String interner for identifier tokens
+    /// * `start_byte` - Byte offset to start lexing from
+    /// * `start_line` - Pre-calculated line number at start_byte (1-indexed)
+    /// * `start_column` - Pre-calculated column number at start_byte (1-indexed)
+    ///
+    /// # Returns
+    /// None if start_byte is invalid (out of bounds or mid-character)
+    pub fn new_at(
+        source: &str,
+        diagnostic_handler: Arc<dyn DiagnosticHandler>,
+        interner: &'a StringInterner,
+        start_byte: u32,
+        start_line: u32,
+        start_column: u32,
+    ) -> Option<Self> {
+        let estimated_capacity = source.len() / 2 + 10;
+        let mut chars = Vec::with_capacity(estimated_capacity);
+        chars.extend(source.chars());
+
+        let mut lexer = Self {
+            source: chars,
+            position: 0,
+            line: 1,
+            column: 1,
+            diagnostic_handler,
+            interner,
+        };
+
+        // Verify start_byte is valid and sync position
+        if !lexer.sync_position(start_byte) {
+            return None;
+        }
+
+        // Override with pre-calculated line/column if provided
+        if start_line > 0 && start_column > 0 {
+            lexer.line = start_line;
+            lexer.column = start_column;
+        }
+
+        Some(lexer)
+    }
+
     /// Tokenize the entire source
     pub fn tokenize(&mut self) -> Result<Vec<Token>, LexerError> {
         let estimated_tokens = (self.source.len() / 4).saturating_add(4);
@@ -60,6 +157,76 @@ impl<'a> Lexer<'a> {
         }
 
         tokens.push(Token::eof(self.position));
+        tokens.shrink_to_fit();
+        Ok(tokens)
+    }
+
+    /// Tokenize from a specific byte offset to end of source
+    pub fn tokenize_from(&mut self, start_byte: u32) -> Result<Vec<Token>, LexerError> {
+        if !self.sync_position(start_byte) {
+            return Err(LexerError::InvalidByteOffset(start_byte));
+        }
+
+        let estimated_tokens = ((self.source.len() - self.position as usize) / 4).saturating_add(4);
+        let mut tokens = Vec::with_capacity(estimated_tokens);
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+            if self.is_at_end() {
+                break;
+            }
+
+            if self.try_skip_comment() {
+                continue;
+            }
+
+            let token = self.next_token()?;
+            tokens.push(token);
+        }
+
+        tokens.push(Token::eof(self.position));
+        tokens.shrink_to_fit();
+        Ok(tokens)
+    }
+
+    /// Tokenize a specific byte range
+    /// Returns tokens whose spans are entirely within [start_byte, end_byte)
+    pub fn tokenize_range(&mut self, start_byte: u32, end_byte: u32) -> Result<Vec<Token>, LexerError> {
+        if start_byte > end_byte {
+            return Err(LexerError::InvalidRange(start_byte, end_byte));
+        }
+
+        if !self.sync_position(start_byte) {
+            return Err(LexerError::InvalidByteOffset(start_byte));
+        }
+
+        let end_char_idx = self.byte_to_char_index(end_byte).unwrap_or(usize::MAX) as u32;
+        let estimated_tokens = ((end_byte - start_byte) as usize / 4).saturating_add(4);
+        let mut tokens = Vec::with_capacity(estimated_tokens);
+
+        while !self.is_at_end() && self.position < end_char_idx {
+            self.skip_whitespace();
+            if self.is_at_end() || self.position >= end_char_idx {
+                break;
+            }
+
+            if self.try_skip_comment() {
+                continue;
+            }
+
+            let token_start = self.position;
+            let token = self.next_token()?;
+
+            // Only include tokens that end before end_byte
+            if token.span.end <= end_byte {
+                tokens.push(token);
+            } else {
+                // Token spans past end_byte - reset position and stop
+                self.position = token_start;
+                break;
+            }
+        }
+
         tokens.shrink_to_fit();
         Ok(tokens)
     }

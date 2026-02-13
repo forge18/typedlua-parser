@@ -42,7 +42,10 @@ pub enum TypeKind<'arena> {
     TypeQuery(&'arena Expression<'arena>),
     #[serde(borrow)]
     KeyOf(&'arena Type<'arena>),
-    IndexAccess(#[serde(borrow)] &'arena Type<'arena>, #[serde(borrow)] &'arena Type<'arena>),
+    IndexAccess(
+        #[serde(borrow)] &'arena Type<'arena>,
+        #[serde(borrow)] &'arena Type<'arena>,
+    ),
     #[serde(borrow)]
     Conditional(ConditionalType<'arena>),
     #[serde(borrow)]
@@ -53,12 +56,12 @@ pub enum TypeKind<'arena> {
     Nullable(&'arena Type<'arena>),
     #[serde(borrow)]
     Parenthesized(&'arena Type<'arena>),
-    Infer(Ident),                 // infer R - captures type in conditional
+    Infer(Ident), // infer R - captures type in conditional
     #[serde(borrow)]
     TypePredicate(TypePredicate<'arena>), // x is T - type guard predicate
     #[serde(borrow)]
-    Variadic(&'arena Type<'arena>),          // ...T[] - variadic return type
-    Namespace(Vec<String>),       // File-based namespace type
+    Variadic(&'arena Type<'arena>), // ...T[] - variadic return type
+    Namespace(Vec<String>), // File-based namespace type
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

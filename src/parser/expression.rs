@@ -233,7 +233,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let right = self.parse_bitwise_xor()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::BitwiseOr, self.alloc(expr), self.alloc(right)),
+                kind: ExpressionKind::Binary(
+                    BinaryOp::BitwiseOr,
+                    self.alloc(expr),
+                    self.alloc(right),
+                ),
                 span,
                 ..Default::default()
             };
@@ -250,7 +254,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let right = self.parse_bitwise_and()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::BitwiseXor, self.alloc(expr), self.alloc(right)),
+                kind: ExpressionKind::Binary(
+                    BinaryOp::BitwiseXor,
+                    self.alloc(expr),
+                    self.alloc(right),
+                ),
                 span,
                 ..Default::default()
             };
@@ -267,7 +275,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let right = self.parse_equality()?;
             let span = expr.span.combine(&right.span);
             expr = Expression {
-                kind: ExpressionKind::Binary(BinaryOp::BitwiseAnd, self.alloc(expr), self.alloc(right)),
+                kind: ExpressionKind::Binary(
+                    BinaryOp::BitwiseAnd,
+                    self.alloc(expr),
+                    self.alloc(right),
+                ),
                 span,
                 ..Default::default()
             };
@@ -561,7 +573,11 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             let arguments = self.alloc_vec(arguments);
                             let span = expr.span.combine(&end_span);
                             expr = Expression {
-                                kind: ExpressionKind::OptionalCall(self.alloc(expr), arguments, None),
+                                kind: ExpressionKind::OptionalCall(
+                                    self.alloc(expr),
+                                    arguments,
+                                    None,
+                                ),
                                 span,
                                 ..Default::default()
                             };
@@ -962,9 +978,9 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         self.arena,
                     );
                     let expr = temp_parser.parse_expression()?;
-                    ast_parts.push(crate::ast::expression::TemplatePart::Expression(self.alloc(
-                        expr,
-                    )));
+                    ast_parts.push(crate::ast::expression::TemplatePart::Expression(
+                        self.alloc(expr),
+                    ));
                 }
             }
         }

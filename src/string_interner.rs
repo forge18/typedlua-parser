@@ -129,7 +129,9 @@ impl StringInterner {
         for s in strings {
             rodeo.get_or_intern(s);
         }
-        Self { rodeo: Arc::new(rodeo) }
+        Self {
+            rodeo: Arc::new(rodeo),
+        }
     }
 
     /// Get the number of unique strings interned

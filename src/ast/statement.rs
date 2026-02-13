@@ -54,7 +54,7 @@ pub enum Statement<'arena> {
     #[serde(borrow)]
     DeclareNamespace(DeclareNamespaceStatement<'arena>),
     #[serde(borrow)]
-    DeclareType(TypeAliasDeclaration<'arena>),      // Same as TypeAlias
+    DeclareType(TypeAliasDeclaration<'arena>), // Same as TypeAlias
     #[serde(borrow)]
     DeclareInterface(InterfaceDeclaration<'arena>), // Same as Interface
     #[serde(borrow)]

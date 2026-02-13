@@ -408,16 +408,16 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             self.consume(TokenKind::End, "Expected 'end' after for body")?;
             let end_span = self.current_span();
 
-            Ok(Statement::For(self.alloc(ForStatement::Numeric(self.alloc(
-                ForNumeric {
+            Ok(Statement::For(self.alloc(ForStatement::Numeric(
+                self.alloc(ForNumeric {
                     variable: first_var,
                     start,
                     end,
                     step,
                     body,
                     span: start_span.combine(&end_span),
-                },
-            )))))
+                }),
+            ))))
         } else {
             // Generic for: for k, v in iterator do
             let mut variables = vec![first_var];
@@ -543,7 +543,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         })
     }
 
-    fn parse_interface_members(&mut self, use_braces: bool) -> Result<&'arena [InterfaceMember<'arena>], ParserError> {
+    fn parse_interface_members(
+        &mut self,
+        use_braces: bool,
+    ) -> Result<&'arena [InterfaceMember<'arena>], ParserError> {
         let mut members = Vec::new();
 
         let end_token = if use_braces {
@@ -2318,7 +2321,9 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
     }
 
-    pub(super) fn parse_type_parameters(&mut self) -> Result<&'arena [TypeParameter<'arena>], ParserError> {
+    pub(super) fn parse_type_parameters(
+        &mut self,
+    ) -> Result<&'arena [TypeParameter<'arena>], ParserError> {
         let mut params = Vec::new();
 
         loop {
@@ -2360,7 +2365,9 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     #[inline]
-    pub(super) fn parse_parameter_list(&mut self) -> Result<&'arena [Parameter<'arena>], ParserError> {
+    pub(super) fn parse_parameter_list(
+        &mut self,
+    ) -> Result<&'arena [Parameter<'arena>], ParserError> {
         let mut params = Vec::with_capacity(4);
 
         if self.check(&TokenKind::RightParen) {

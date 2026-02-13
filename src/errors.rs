@@ -17,4 +17,10 @@ pub enum LexerError {
 
     #[error("Unexpected character: {0}")]
     UnexpectedCharacter(char),
+
+    #[error("Invalid byte offset: {0}")]
+    InvalidByteOffset(u32),
+
+    #[error("Invalid byte range: {0} to {1}")]
+    InvalidRange(u32, u32),
 }

@@ -1,5 +1,5 @@
-use super::{ExpressionParser, Parser, ParserError};
 use super::types::TypeParser;
+use super::{ExpressionParser, Parser, ParserError};
 use crate::ast::expression::Literal;
 use crate::ast::pattern::*;
 use crate::ast::Spanned;
@@ -151,7 +151,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 } else {
                     None
                 };
-                elements.push(ArrayPatternElement::Pattern(PatternWithDefault { pattern, default }));
+                elements.push(ArrayPatternElement::Pattern(PatternWithDefault {
+                    pattern,
+                    default,
+                }));
             }
 
             if !self.check(&TokenKind::RightBracket) {
