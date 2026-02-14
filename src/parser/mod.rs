@@ -22,6 +22,22 @@ pub use types::TypeParser;
 pub struct ParserError {
     pub message: String,
     pub span: Span,
+    pub suggestion: Option<String>,
+}
+
+impl ParserError {
+    pub fn new(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            message: message.into(),
+            span,
+            suggestion: None,
+        }
+    }
+
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.suggestion = Some(suggestion.into());
+        self
+    }
 }
 
 impl std::fmt::Display for ParserError {
@@ -548,10 +564,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             return Ok(self.advance());
         }
 
-        Err(ParserError {
-            message: message.to_string(),
-            span: self.current_span(),
-        })
+        Err(ParserError::new(message, self.current_span()))
     }
 
     /// Consume a closing `>` for type arguments.
@@ -568,10 +581,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             self.tokens[self.position].kind = TokenKind::GreaterThan;
             Ok(())
         } else {
-            Err(ParserError {
-                message: "Expected '>' after type arguments".to_string(),
-                span: self.current_span(),
-            })
+            Err(ParserError::new(
+                "Expected '>' after type arguments",
+                self.current_span(),
+            ))
         }
     }
 

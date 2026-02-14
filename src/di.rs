@@ -1,13 +1,15 @@
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
+type ServiceFactory = Arc<dyn Fn(&mut DiContainer) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
+
 pub enum ServiceLifetime {
     Transient,
     Singleton,
 }
 
 struct FactoryData {
-    factory: Arc<dyn Fn(&mut DiContainer) -> Arc<dyn Any + Send + Sync> + Send + Sync>,
+    factory: ServiceFactory,
     lifetime: ServiceLifetime,
 }
 
@@ -32,8 +34,7 @@ impl DiContainer {
         T: Send + Sync + 'static,
     {
         let type_id = TypeId::of::<T>();
-        let factory: Arc<dyn Fn(&mut DiContainer) -> Arc<dyn Any + Send + Sync> + Send + Sync> =
-            Arc::new(move |container| {
+        let factory: ServiceFactory = Arc::new(move |container| {
                 let instance: T = factory(container);
                 Arc::new(instance) as Arc<dyn Any + Send + Sync>
             });

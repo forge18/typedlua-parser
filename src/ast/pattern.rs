@@ -45,6 +45,7 @@ pub struct ArrayPattern<'arena> {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ArrayPatternElement<'arena> {
     #[serde(borrow)]
     Pattern(PatternWithDefault<'arena>),
