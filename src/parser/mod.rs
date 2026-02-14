@@ -721,10 +721,7 @@ mod tests {
     #[test]
     fn test_parser_error_display() {
         let span = Span::new(0, 5, 1, 1);
-        let error = ParserError {
-            message: "Test error".to_string(),
-            span,
-        };
+        let error = ParserError::new("Test error", span);
         assert_eq!(format!("{}", error), "Test error at line 1");
     }
 
@@ -972,10 +969,7 @@ mod tests {
 
     #[test]
     fn test_parser_error_trait_impl() {
-        let error = ParserError {
-            message: "Test error".to_string(),
-            span: Span::new(0, 10, 1, 1),
-        };
+        let error = ParserError::new("Test error", Span::new(0, 10, 1, 1));
 
         // Test that ParserError implements std::error::Error
         let _: &(dyn std::error::Error) = &error;

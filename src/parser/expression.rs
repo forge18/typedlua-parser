@@ -60,10 +60,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 span: start_span,
             }])
         } else {
-            return Err(ParserError {
-                message: "Expected parameter or '(' in arrow function".to_string(),
-                span: start_span,
-            });
+            return Err(ParserError::new(
+                "Expected parameter or '(' in arrow function",
+                start_span,
+            ));
         };
 
         // Optional return type
@@ -427,10 +427,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     ..Default::default()
                 });
             } else {
-                return Err(ParserError {
-                    message: "Expected function call after 'new' keyword".to_string(),
-                    span: constructor.span,
-                });
+                return Err(ParserError::new(
+                    "Expected function call after 'new' keyword",
+                    constructor.span,
+                ));
             }
         }
 
@@ -663,24 +663,24 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     // Parse hexadecimal number
                     i64::from_str_radix(&s[2..], 16)
                         .map(|i| i as f64)
-                        .map_err(|_| ParserError {
-                            message: "Invalid hexadecimal number literal".to_string(),
-                            span: start_span,
-                        })?
+                        .map_err(|_| ParserError::new(
+                            "Invalid hexadecimal number literal",
+                            start_span,
+                        ))?
                 } else if s.starts_with("0b") || s.starts_with("0B") {
                     // Parse binary number
                     i64::from_str_radix(&s[2..], 2)
                         .map(|i| i as f64)
-                        .map_err(|_| ParserError {
-                            message: "Invalid binary number literal".to_string(),
-                            span: start_span,
-                        })?
+                        .map_err(|_| ParserError::new(
+                            "Invalid binary number literal",
+                            start_span,
+                        ))?
                 } else {
                     // Parse decimal number
-                    s.parse::<f64>().map_err(|_| ParserError {
-                        message: "Invalid number literal".to_string(),
-                        span: start_span,
-                    })?
+                    s.parse::<f64>().map_err(|_| ParserError::new(
+                        "Invalid number literal",
+                        start_span,
+                    ))?
                 };
                 self.advance();
                 Ok(Expression {
@@ -747,10 +747,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     ..Default::default()
                 })
             }
-            _ => Err(ParserError {
-                message: format!("Unexpected token in expression: {:?}", self.current().kind),
-                span: start_span,
-            }),
+            _ => Err(ParserError::new(
+                format!("Unexpected token in expression: {:?}", self.current().kind),
+                start_span,
+            )),
         }
     }
 
@@ -1168,10 +1168,10 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
-        let tokens = lexer.tokenize().map_err(|e| ParserError {
-            message: format!("Lexer error: {:?}", e),
-            span: Span::default(),
-        })?;
+        let tokens = lexer.tokenize().map_err(|e| ParserError::new(
+            format!("Lexer error: {:?}", e),
+            Span::default(),
+        ))?;
         let arena = Box::leak(Box::new(Bump::new()));
         let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_expression()
