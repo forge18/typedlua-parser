@@ -1110,4 +1110,120 @@ mod tests {
         let code = Parser::classify_error_code("Some random error");
         assert_eq!(code.as_str(), "E2001");
     }
+
+    // --- ParserError suggestion tests ---
+
+    #[test]
+    fn test_parser_error_new_has_no_suggestion() {
+        let err = ParserError::new("test", Span::default());
+        assert!(err.suggestion.is_none());
+    }
+
+    #[test]
+    fn test_parser_error_with_suggestion() {
+        let err = ParserError::new("test", Span::default())
+            .with_suggestion("try this instead");
+        assert_eq!(err.suggestion.as_deref(), Some("try this instead"));
+    }
+
+    #[test]
+    fn test_missing_end_has_suggestion() {
+        let (_, handler) = parse_program("if true then local x = 1");
+        let diags = handler.get_diagnostics();
+        assert!(handler.has_errors());
+        // Should have a suggestion about adding 'end'
+        let end_diag = diags.iter().find(|d| d.message.contains("end"));
+        assert!(end_diag.is_some(), "Expected diagnostic about missing 'end'");
+        let diag = end_diag.unwrap();
+        assert!(
+            !diag.suggestions.is_empty(),
+            "Expected suggestion for missing 'end', got none"
+        );
+        assert!(
+            diag.suggestions[0].message.contains("end"),
+            "Suggestion should mention 'end', got: {}",
+            diag.suggestions[0].message
+        );
+    }
+
+    #[test]
+    fn test_missing_closing_paren_has_suggestion() {
+        let (_, handler) = parse_program("function foo( end");
+        let diags = handler.get_diagnostics();
+        assert!(handler.has_errors());
+        let paren_diag = diags.iter().find(|d| d.message.contains(")"));
+        assert!(paren_diag.is_some(), "Expected diagnostic about missing ')'");
+        let diag = paren_diag.unwrap();
+        assert!(
+            !diag.suggestions.is_empty(),
+            "Expected suggestion for missing ')', got none"
+        );
+        assert!(
+            diag.suggestions[0].message.contains(")"),
+            "Suggestion should mention ')', got: {}",
+            diag.suggestions[0].message
+        );
+    }
+
+    #[test]
+    fn test_missing_then_has_suggestion() {
+        let (_, handler) = parse_program("if true local x = 1 end");
+        let diags = handler.get_diagnostics();
+        assert!(handler.has_errors());
+        let then_diag = diags.iter().find(|d| d.message.contains("then"));
+        assert!(then_diag.is_some(), "Expected diagnostic about missing 'then'");
+        let diag = then_diag.unwrap();
+        assert!(
+            !diag.suggestions.is_empty(),
+            "Expected suggestion for missing 'then', got none"
+        );
+        assert!(
+            diag.suggestions[0].message.contains("then"),
+            "Suggestion should mention 'then', got: {}",
+            diag.suggestions[0].message
+        );
+    }
+
+    #[test]
+    fn test_suggest_for_expected_returns_correct_suggestions() {
+        let arena = Bump::new();
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
+        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::End),
+            Some("Add 'end' to close this block")
+        );
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::Then),
+            Some("Add 'then' after the condition")
+        );
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::Do),
+            Some("Add 'do' after the condition")
+        );
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::Until),
+            Some("Add 'until' followed by a condition")
+        );
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::RightParen),
+            Some("Add ')' to close the opening '('")
+        );
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::RightBracket),
+            Some("Add ']' to close the opening '['")
+        );
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::RightBrace),
+            Some("Add '}' to close the opening '{'")
+        );
+        // Unknown token should return None
+        assert_eq!(
+            parser.suggest_for_expected(&TokenKind::Plus),
+            None
+        );
+    }
 }
