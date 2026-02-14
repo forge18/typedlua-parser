@@ -164,13 +164,12 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let prog = self.parse()?;
             let arena_arc = Arc::new(Bump::new());
 
-            // Cache tokens for each statement
+            // Cache tokens for each statement using binary search
             let cached_statements: Vec<_> = prog.statements.iter().map(|stmt| {
                 let span = crate::incremental::get_statement_span(stmt);
-                let stmt_tokens: Vec<_> = self.tokens.iter()
-                    .filter(|t| t.span.start >= span.start && t.span.end <= span.end)
-                    .cloned()
-                    .collect();
+                let start_idx = self.tokens.partition_point(|t| t.span.start < span.start);
+                let end_idx = self.tokens.partition_point(|t| t.span.start < span.end);
+                let stmt_tokens: Vec<_> = self.tokens[start_idx..end_idx].iter().cloned().collect();
                 crate::incremental::CachedStatement::new(stmt, source, 0, stmt_tokens)
             }).collect();
 
@@ -217,13 +216,13 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
 
         // Incremental path: Separate clean from dirty statements
-        let mut clean_statements = Vec::new();
+        let mut clean_set = std::collections::HashSet::new();
         let mut dirty_ranges = Vec::new();
 
         for (idx, cached) in prev_tree.statements.iter().enumerate() {
-            if is_statement_clean(cached.statement, edits) && cached.is_valid(source) {
+            if is_statement_clean(cached.statement, edits) {
                 // Safe to reuse this statement
-                clean_statements.push((idx, cached));
+                clean_set.insert(idx);
             } else {
                 // Need to re-parse this region
                 dirty_ranges.push((idx, cached.byte_range));
@@ -231,7 +230,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
 
         // If all statements are dirty, fall back to full parse
-        if clean_statements.is_empty() {
+        if clean_set.is_empty() {
             let prog = self.parse()?;
             let arena_arc = Arc::new(Bump::new());
             let tree = crate::incremental::IncrementalParseTree::new(
@@ -248,21 +247,43 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let new_arena = Arc::new(Bump::new());
         let next_generation = prev_tree.arenas.len();
 
-        // Re-parse dirty regions
-        let mut dirty_idx = 0;
+        // Lex only dirty regions instead of using the full token stream
+        // This avoids the cost of lexing the entire file
+        let mut dirty_tokens_map: Vec<(usize, Vec<Token>)> = Vec::new();
+        for &(stmt_idx, byte_range) in &dirty_ranges {
+            // Determine lex range: from dirty stmt start to next stmt start (or EOF)
+            let lex_start = byte_range.0;
+            let lex_end = prev_tree.statements.get(stmt_idx + 1)
+                .map(|s| s.byte_range.0)
+                .unwrap_or(source.len() as u32);
+
+            // Lex just this region
+            let mut region_lexer = crate::lexer::Lexer::new(source, self.diagnostic_handler.clone(), self.interner);
+            if let Ok(region_tokens) = region_lexer.tokenize_range(lex_start, lex_end) {
+                dirty_tokens_map.push((stmt_idx, region_tokens));
+            }
+        }
+
+        // Re-parse dirty regions using locally-lexed tokens
+        let mut dirty_map_idx = 0;
         for (stmt_idx, cached) in prev_tree.statements.iter().enumerate() {
-            if clean_statements.iter().any(|(idx, _)| *idx == stmt_idx) {
-                // Reuse clean statement (clone the value, which is cheap)
+            if clean_set.contains(&stmt_idx) {
+                // Reuse clean statement
                 all_statements.push(cached.statement.clone());
-            } else {
-                // Parse dirty region
-                if dirty_idx < dirty_ranges.len() && dirty_ranges[dirty_idx].0 == stmt_idx {
-                    let byte_offset = dirty_ranges[dirty_idx].1.0 as usize;
-                    if let Ok(stmt) = self.parse_statement_at_offset(byte_offset) {
-                        all_statements.push(stmt);
-                    }
-                    dirty_idx += 1;
+            } else if dirty_map_idx < dirty_tokens_map.len() && dirty_tokens_map[dirty_map_idx].0 == stmt_idx {
+                // Swap in dirty region tokens, parse, then restore
+                let dirty_tokens = &dirty_tokens_map[dirty_map_idx].1;
+                let saved_tokens = std::mem::replace(&mut self.tokens, dirty_tokens.clone());
+                let saved_position = self.position;
+                self.position = 0;
+
+                if let Ok(stmt) = self.parse_statement() {
+                    all_statements.push(stmt);
                 }
+
+                self.tokens = saved_tokens;
+                self.position = saved_position;
+                dirty_map_idx += 1;
             }
         }
 
@@ -273,34 +294,32 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             statements_slice.first().map(|s| s.span()).unwrap_or_else(|| Span::new(0, 0, 0, 0)),
         );
 
-        // Build new cached statements - need to allocate statement refs in arena
+        // Build new cached statements
         let stmt_refs: Vec<&'arena crate::ast::statement::Statement<'arena>> = statements_slice.iter().collect();
 
         let new_cached: Vec<crate::incremental::CachedStatement<'arena>> = stmt_refs
             .iter()
             .enumerate()
             .map(|(idx, stmt_ref)| {
-                // Check if this was reused or newly parsed
-                let (arena_gen, tokens) = if let Some((clean_idx, _)) = clean_statements.iter().find(|(clean_idx, _)| *clean_idx == idx) {
-                    // Reused statement keeps its original generation and tokens
-                    (prev_tree.statements[*clean_idx].arena_generation, prev_tree.statements[*clean_idx].tokens.clone())
+                if clean_set.contains(&idx) {
+                    // Reuse the original cached statement directly
+                    // SAFETY: 'static → 'arena transmute is safe because the arena is kept
+                    // alive via Arc<Bump> in the IncrementalParseTree
+                    unsafe { std::mem::transmute(prev_tree.statements[idx].clone()) }
                 } else {
-                    // Newly parsed statement gets new generation
-                    // Extract tokens for this statement's span
-                    let span = crate::incremental::get_statement_span(stmt_ref);
-                    let stmt_tokens: Vec<_> = self.tokens.iter()
-                        .filter(|t| t.span.start >= span.start && t.span.end <= span.end)
-                        .cloned()
-                        .collect();
-                    (next_generation, stmt_tokens)
-                };
+                    // Newly parsed statement: use tokens from the dirty region lex
+                    let stmt_tokens = dirty_tokens_map.iter()
+                        .find(|(i, _)| *i == idx)
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or_default();
 
-                crate::incremental::CachedStatement::new(
-                    stmt_ref,
-                    source,
-                    arena_gen,
-                    tokens,
-                )
+                    crate::incremental::CachedStatement::new(
+                        stmt_ref,
+                        source,
+                        next_generation,
+                        stmt_tokens,
+                    )
+                }
             })
             .collect();
 
@@ -328,11 +347,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         &mut self,
         byte_offset: usize,
     ) -> Result<crate::ast::statement::Statement<'arena>, ParserError> {
-        // Find the first token at or after the byte offset
-        let target_position = self.tokens
-            .iter()
-            .position(|t| t.span.start >= byte_offset as u32)
-            .unwrap_or(self.tokens.len().saturating_sub(1));
+        // Binary search for the first token at or after the byte offset
+        let target_position = self
+            .tokens
+            .partition_point(|t| (t.span.start as usize) < byte_offset);
 
         // Seek parser to that position
         self.position = target_position;
