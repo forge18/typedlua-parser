@@ -139,7 +139,12 @@ impl DirtyRegionSet {
             let first_idx = Self::find_first_affected(statement_ranges, edit_start);
 
             // Binary search for last affected statement
-            let last_idx = Self::find_last_affected(statement_ranges, edit_end);
+            // For zero-length insertions, last affected = first affected
+            let last_idx = if edit_start == edit_end {
+                first_idx
+            } else {
+                Self::find_last_affected(statement_ranges, edit_end)
+            };
 
             let affected_statements = if let (Some(first), Some(last)) = (first_idx, last_idx) {
                 (first..=last).collect()
@@ -175,8 +180,8 @@ impl DirtyRegionSet {
         let mut current = sorted[0].clone();
 
         for edit in &sorted[1..] {
-            if edit.range.0 <= current.new_end() {
-                // Overlapping or adjacent - merge them
+            if edit.range.0 <= current.range.1 {
+                // Overlapping or adjacent in original coordinates - merge them
                 let combined_text = format!("{}{}", current.new_text, edit.new_text);
                 current = TextEdit {
                     range: (current.range.0, max(current.range.1, edit.range.1)),
@@ -668,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn test_adjacent_edits_merge() {
+    fn test_adjacent_edits_no_merge() {
         let statement_ranges = vec![(
             0,
             Span {
@@ -679,23 +684,55 @@ mod tests {
             },
         )];
 
-        // Two adjacent insertions
+        // Two non-overlapping insertions in original coordinates
+        // (5,5) and (6,6) don't overlap since first edit's range.1 = 5 < 6
         let edits = vec![
             TextEdit {
                 range: (5, 5),
                 new_text: "a".to_string(),
             },
             TextEdit {
-                range: (6, 6), // Adjacent after first edit
+                range: (6, 6),
                 new_text: "b".to_string(),
             },
         ];
 
         let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
 
-        // Should merge because they're adjacent
-        assert_eq!(dirty.regions.len(), 1);
+        // Not overlapping in original coordinates - two separate regions
+        assert_eq!(dirty.regions.len(), 2);
         assert_eq!(dirty.total_delta, 2);
+    }
+
+    #[test]
+    fn test_overlapping_edits_merge() {
+        let statement_ranges = vec![(
+            0,
+            Span {
+                start: 0,
+                end: 20,
+                line: 1,
+                column: 0,
+            },
+        )];
+
+        // Two edits that overlap in original coordinates
+        let edits = vec![
+            TextEdit {
+                range: (5, 8),
+                new_text: "a".to_string(),
+            },
+            TextEdit {
+                range: (7, 10),
+                new_text: "b".to_string(),
+            },
+        ];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        // Overlapping in original coordinates - should merge
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.total_delta, -3); // "ab" (2) - (10-5) (5) = -3
     }
 
     #[test]

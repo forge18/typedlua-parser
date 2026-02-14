@@ -184,8 +184,6 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         edits: &[crate::incremental::TextEdit],
         source: &str,
     ) -> Result<(Program<'arena>, crate::incremental::IncrementalParseTree<'arena>), ParserError> {
-        use crate::incremental::is_statement_clean;
-
         // Fast path: No previous tree, do full parse
         let Some(prev_tree) = prev_tree else {
             crate::incremental::debug_incremental!("No previous tree, doing full parse ({} chars)", source.len());
@@ -247,29 +245,26 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             return Ok((prog, new_tree));
         }
 
-        // Incremental path: Separate clean from dirty statements
-        let mut clean_set = std::collections::HashSet::new();
-        let mut dirty_ranges = Vec::new();
+        // Incremental path: Classify each statement as clean or dirty using
+        // overlap detection against edit ranges (in old-source coordinates).
+        use crate::incremental::is_statement_clean;
 
-        for (idx, cached) in prev_tree.statements.iter().enumerate() {
-            if is_statement_clean(cached.statement, edits) {
-                // Safe to reuse this statement
-                clean_set.insert(idx);
-            } else {
-                // Need to re-parse this region
-                dirty_ranges.push((idx, cached.byte_range));
-            }
-        }
+        let clean_flags: Vec<bool> = prev_tree.statements.iter()
+            .map(|cached| is_statement_clean(cached.statement, edits))
+            .collect();
+
+        let clean_count = clean_flags.iter().filter(|&&c| c).count();
+        let dirty_count = clean_flags.len() - clean_count;
 
         crate::incremental::debug_incremental!(
             "Incremental parse: {} clean, {} dirty out of {} total",
-            clean_set.len(),
-            dirty_ranges.len(),
+            clean_count,
+            dirty_count,
             prev_tree.statements.len()
         );
 
         // If all statements are dirty, fall back to full parse
-        if clean_set.is_empty() {
+        if clean_count == 0 {
             crate::incremental::debug_incremental!(
                 "All {} statements dirty, falling back to full parse",
                 prev_tree.statements.len()
@@ -285,48 +280,106 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             return Ok((prog, tree));
         }
 
-        // Build new statement list: mix of cached + newly parsed
+        // Compute cumulative byte delta at each statement boundary.
+        // For a statement at old offset X, its new offset = X + delta_before(X).
+        // Edits are sorted by start position for this calculation.
+        let mut sorted_edits: Vec<&crate::incremental::TextEdit> = edits.iter().collect();
+        sorted_edits.sort_by_key(|e| e.range.0);
+
+        // Precompute cumulative delta at each statement's start position
+        let mut stmt_deltas: Vec<i32> = Vec::with_capacity(prev_tree.statements.len());
+        let mut edit_cursor = 0;
+        let mut cumulative_delta: i32 = 0;
+        for cached in &prev_tree.statements {
+            let stmt_start = cached.byte_range.0;
+            // Accumulate deltas from all edits that end at or before this statement
+            while edit_cursor < sorted_edits.len()
+                && sorted_edits[edit_cursor].range.1 <= stmt_start
+            {
+                cumulative_delta += sorted_edits[edit_cursor].byte_delta();
+                edit_cursor += 1;
+            }
+            stmt_deltas.push(cumulative_delta);
+        }
+        // Build new statement list: mix of cached clean + newly parsed dirty regions.
+        // Track which statements are clean (reused) for building the cached tree.
+        enum StmtOrigin {
+            /// Clean statement: index into prev_tree.statements, delta to apply
+            Clean(usize, i32),
+            /// Newly parsed statement
+            New,
+        }
         let mut all_statements: Vec<crate::ast::statement::Statement<'arena>> = Vec::new();
+        let mut stmt_origins: Vec<StmtOrigin> = Vec::new();
         let new_arena = Rc::new(Bump::new());
         let next_generation = prev_tree.arenas.len();
 
-        // Lex only dirty regions instead of using the full token stream
-        // This avoids the cost of lexing the entire file
-        let mut dirty_tokens_map: Vec<(usize, Vec<Token>)> = Vec::new();
-        for &(stmt_idx, byte_range) in &dirty_ranges {
-            // Determine lex range: from dirty stmt start to next stmt start (or EOF)
-            let lex_start = byte_range.0;
-            let lex_end = prev_tree.statements.get(stmt_idx + 1)
-                .map(|s| s.byte_range.0)
-                .unwrap_or(source.len() as u32);
+        let mut stmt_idx = 0;
+        while stmt_idx < prev_tree.statements.len() {
+            if clean_flags[stmt_idx] {
+                // Reuse clean statement as-is
+                all_statements.push(prev_tree.statements[stmt_idx].statement.clone());
+                stmt_origins.push(StmtOrigin::Clean(stmt_idx, stmt_deltas[stmt_idx]));
+                stmt_idx += 1;
+            } else {
+                // Find contiguous run of dirty statements
+                let dirty_start = stmt_idx;
+                while stmt_idx < prev_tree.statements.len() && !clean_flags[stmt_idx] {
+                    stmt_idx += 1;
+                }
 
-            // Lex just this region
-            let mut region_lexer = crate::lexer::Lexer::new(source, self.diagnostic_handler.clone(), self.interner);
-            if let Ok(region_tokens) = region_lexer.tokenize_range(lex_start, lex_end) {
-                dirty_tokens_map.push((stmt_idx, region_tokens));
+                // Compute lex range in NEW source coordinates:
+                // - Start: first dirty statement's old start + its cumulative delta
+                // - End: next clean statement's old start + its delta, or EOF
+                let old_start = prev_tree.statements[dirty_start].byte_range.0;
+                let lex_start = (old_start as i32 + stmt_deltas[dirty_start]) as u32;
+
+                let lex_end = if stmt_idx < prev_tree.statements.len() {
+                    let old_next = prev_tree.statements[stmt_idx].byte_range.0;
+                    (old_next as i32 + stmt_deltas[stmt_idx]) as u32
+                } else {
+                    source.len() as u32
+                };
+
+                // Skip empty regions (entire dirty run was deleted)
+                if lex_start >= lex_end {
+                    crate::incremental::debug_incremental!(
+                        "Dirty region [{},{}] is empty after adjustment, skipping",
+                        lex_start, lex_end
+                    );
+                    continue;
+                }
+
+                // Lex and parse all statements in this region
+                let count_before = all_statements.len();
+                self.parse_region(source, lex_start, lex_end, &mut all_statements);
+                let new_count = all_statements.len() - count_before;
+                for _ in 0..new_count {
+                    stmt_origins.push(StmtOrigin::New);
+                }
             }
         }
 
-        // Re-parse dirty regions using locally-lexed tokens
-        let mut dirty_map_idx = 0;
-        for (stmt_idx, cached) in prev_tree.statements.iter().enumerate() {
-            if clean_set.contains(&stmt_idx) {
-                // Reuse clean statement
-                all_statements.push(cached.statement.clone());
-            } else if dirty_map_idx < dirty_tokens_map.len() && dirty_tokens_map[dirty_map_idx].0 == stmt_idx {
-                // Swap in dirty region tokens, parse, then restore
-                let dirty_tokens = &dirty_tokens_map[dirty_map_idx].1;
-                let saved_tokens = std::mem::replace(&mut self.tokens, dirty_tokens.clone());
-                let saved_position = self.position;
-                self.position = 0;
+        // Handle new content appended after all old statements.
+        // Only edits ending strictly before last_old_end shift its position.
+        {
+            let last_old_end = prev_tree.statements.last()
+                .map(|s| s.byte_range.1)
+                .unwrap_or(0);
+            let delta_before_end: i32 = sorted_edits.iter()
+                .filter(|e| e.range.1 < last_old_end)
+                .map(|e| e.byte_delta())
+                .sum();
+            let adjusted_end = (last_old_end as i32 + delta_before_end) as u32;
+            let source_len = source.len() as u32;
 
-                if let Ok(stmt) = self.parse_statement() {
-                    all_statements.push(stmt);
+            if adjusted_end < source_len {
+                let count_before = all_statements.len();
+                self.parse_region(source, adjusted_end, source_len, &mut all_statements);
+                let new_count = all_statements.len() - count_before;
+                for _ in 0..new_count {
+                    stmt_origins.push(StmtOrigin::New);
                 }
-
-                self.tokens = saved_tokens;
-                self.position = saved_position;
-                dirty_map_idx += 1;
             }
         }
 
@@ -337,30 +390,31 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             statements_slice.first().map(|s| s.span()).unwrap_or_else(|| Span::new(0, 0, 0, 0)),
         );
 
-        // Build new cached statements
-        let stmt_refs: Vec<&'arena crate::ast::statement::Statement<'arena>> = statements_slice.iter().collect();
-
-        let new_cached: Vec<crate::incremental::CachedStatement<'arena>> = stmt_refs
-            .iter()
+        // Build cached statements: carry forward clean entries with adjusted
+        // byte ranges, create new entries for freshly parsed statements.
+        let new_cached: Vec<crate::incremental::CachedStatement<'arena>> = stmt_origins
+            .into_iter()
             .enumerate()
-            .map(|(idx, stmt_ref)| {
-                if clean_set.contains(&idx) {
-                    // Reuse the original cached statement directly
-                    // SAFETY: 'static → 'arena transmute is safe because the arena is kept
-                    // alive via Rc<Bump> in the IncrementalParseTree
-                    unsafe { std::mem::transmute::<crate::incremental::CachedStatement<'_>, crate::incremental::CachedStatement<'_>>(prev_tree.statements[idx].clone()) }
-                } else {
-                    // Newly parsed statement: use tokens from the dirty region lex
-                    let stmt_tokens = dirty_tokens_map.iter()
-                        .find(|(i, _)| *i == idx)
-                        .map(|(_, t)| t.clone())
-                        .unwrap_or_default();
-
+            .map(|(i, origin)| match origin {
+                StmtOrigin::Clean(old_idx, delta) => {
+                    let old = &prev_tree.statements[old_idx];
+                    crate::incremental::CachedStatement {
+                        statement: &statements_slice[i],
+                        byte_range: (
+                            (old.byte_range.0 as i32 + delta) as u32,
+                            (old.byte_range.1 as i32 + delta) as u32,
+                        ),
+                        source_hash: old.source_hash,
+                        tokens: old.tokens.clone(),
+                        arena_generation: old.arena_generation,
+                    }
+                }
+                StmtOrigin::New => {
                     crate::incremental::CachedStatement::new(
-                        stmt_ref,
+                        &statements_slice[i],
                         source,
                         next_generation,
-                        stmt_tokens,
+                        Vec::new(),
                     )
                 }
             })
@@ -403,6 +457,43 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         // Parse statement from this position
         self.parse_statement()
+    }
+
+    /// Lex and parse a source region, appending results to the statements vector.
+    #[cfg(feature = "incremental-parsing")]
+    fn parse_region(
+        &mut self,
+        source: &str,
+        start: u32,
+        end: u32,
+        statements: &mut Vec<crate::ast::statement::Statement<'arena>>,
+    ) {
+        let mut region_lexer = crate::lexer::Lexer::new(
+            source, self.diagnostic_handler.clone(), self.interner,
+        );
+        if let Ok(mut region_tokens) = region_lexer.tokenize_range(start, end) {
+            if region_tokens.is_empty() {
+                return;
+            }
+            // Append EOF so parser's is_at_end() works correctly
+            region_tokens.push(Token {
+                kind: TokenKind::Eof,
+                span: Span::new(end, end, 0, 0),
+            });
+            let saved_tokens = std::mem::replace(&mut self.tokens, region_tokens);
+            let saved_position = self.position;
+            self.position = 0;
+
+            while !self.is_at_end() {
+                match self.parse_statement() {
+                    Ok(new_stmt) => statements.push(new_stmt),
+                    Err(_) => break,
+                }
+            }
+
+            self.tokens = saved_tokens;
+            self.position = saved_position;
+        }
     }
 
     // Token stream management

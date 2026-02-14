@@ -36,9 +36,19 @@ fn overlaps_any_edit(span: &Span, edits: &[TextEdit]) -> bool {
         let edit_start = edit.range.0;
         let edit_end = edit.range.1;
 
-        // Check for overlap: (span.start < edit_end && span.end > edit_start)
-        if span.start < edit_end && span.end > edit_start {
-            return true;
+        if edit_start == edit_end {
+            // Zero-length insertion: dirty if insertion point is inside the
+            // statement or at its end boundary, i.e. [span.start, span.end].
+            // Insertions at span.end could extend the last token of the
+            // statement (e.g., appending digits to a number literal).
+            if edit_start >= span.start && edit_start <= span.end {
+                return true;
+            }
+        } else {
+            // Range edit (replacement or deletion): standard overlap check
+            if span.start < edit_end && span.end > edit_start {
+                return true;
+            }
         }
     }
     false
@@ -169,16 +179,16 @@ mod tests {
     }
 
     #[test]
-    fn test_edit_exactly_at_statement_end_no_overlap() {
+    fn test_insertion_at_statement_end_is_dirty() {
         let stmt = Statement::Break(Span::new(10, 20, 1, 1));
-        // Edit starts exactly where statement ends
+        // Zero-length insertion at exactly where statement ends
         let edits = vec![TextEdit {
             range: (20, 20),
             new_text: "suffix".to_string(),
         }];
 
-        // No overlap - edit is after statement
-        assert!(is_statement_clean(&stmt, &edits));
+        // Dirty — insertion could extend the last token of the statement
+        assert!(!is_statement_clean(&stmt, &edits));
     }
 
     #[test]

@@ -145,9 +145,25 @@ fn test_periodic_consolidation_every_10_parses() {
     let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
     let (_, mut tree) = parser.parse_incremental(None, &[], source).expect("Parse should succeed");
 
-    // Simulate version 9 - should not consolidate
+    // Simulate version 9 - should not consolidate.
+    // Both arenas must be referenced by statements, otherwise
+    // drop_unreferenced_arenas() will prune the unreferenced one.
     tree.version = 9;
-    tree.arenas.push(Rc::new(Bump::new())); // Add a second arena
+    let arena2 = Rc::new(Bump::new());
+    let break_stmt: &luanext_parser::ast::statement::Statement =
+        arena2.alloc(luanext_parser::ast::statement::Statement::Break(
+            luanext_parser::span::Span::new(0, 5, 1, 1),
+        ));
+    // Clone Rc before moving it into arenas so the borrow is released
+    let arena2_clone = arena2.clone();
+    tree.statements.push(luanext_parser::incremental::CachedStatement {
+        statement: break_stmt,
+        byte_range: (0, 5),
+        source_hash: 0,
+        tokens: Vec::new(),
+        arena_generation: 1,
+    });
+    tree.arenas.push(arena2_clone);
     assert_eq!(tree.arenas.len(), 2);
 
     tree.collect_garbage();

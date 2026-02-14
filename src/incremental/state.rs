@@ -242,6 +242,7 @@ mod tests {
         let new_arena = Bump::new();
         let interner = StringInterner::new();
 
+        let full_source = "local x = 1\nlocal y = 2";
         let cached1 = make_cached_var(
             &old_arena,
             &interner,
@@ -249,7 +250,7 @@ mod tests {
             1.0,
             Span::new(0, 11, 1, 1),
             Span::new(10, 11, 1, 11),
-            "local x = 1",
+            full_source,
         );
         let cached2 = make_cached_var(
             &old_arena,
@@ -258,7 +259,7 @@ mod tests {
             2.0,
             Span::new(12, 23, 2, 1),
             Span::new(22, 23, 2, 11),
-            "local y = 2",
+            full_source,
         );
 
         let statement_ranges = vec![
