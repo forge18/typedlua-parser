@@ -652,10 +652,6 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         }
     }
 
-    fn report_error(&self, message: &str, span: Span) {
-        self.report_parser_error(&ParserError::new(message, span));
-    }
-
     /// Report a ParserError as a diagnostic, including any suggestion.
     fn report_parser_error(&self, error: &ParserError) {
         let error_code = Self::classify_error_code(&error.message);
@@ -1056,142 +1052,62 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_report_error_break_outside_loop() {
-        let arena = Bump::new();
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("break outside loop", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2020");
+    fn test_classify_error_code_break_outside_loop() {
+        let code = Parser::classify_error_code("break outside loop");
+        assert_eq!(code.as_str(), "E2020");
     }
 
     #[test]
-    fn test_parser_report_error_continue_outside_loop() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("continue outside loop", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2021");
+    fn test_classify_error_code_continue_outside_loop() {
+        let code = Parser::classify_error_code("continue outside loop");
+        assert_eq!(code.as_str(), "E2021");
     }
 
     #[test]
-    fn test_parser_report_error_missing_end() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Expected 'end'", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2010");
+    fn test_classify_error_code_missing_end() {
+        let code = Parser::classify_error_code("Expected 'end'");
+        assert_eq!(code.as_str(), "E2010");
     }
 
     #[test]
-    fn test_parser_report_error_missing_then() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Expected 'then'", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2011");
+    fn test_classify_error_code_missing_then() {
+        let code = Parser::classify_error_code("Expected 'then'");
+        assert_eq!(code.as_str(), "E2011");
     }
 
     #[test]
-    fn test_parser_report_error_missing_do() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Expected 'do' in while loop", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2012");
+    fn test_classify_error_code_missing_do() {
+        let code = Parser::classify_error_code("Expected 'do' in while loop");
+        assert_eq!(code.as_str(), "E2012");
     }
 
     #[test]
-    fn test_parser_report_error_expected_identifier() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Expected identifier", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2003");
+    fn test_classify_error_code_expected_identifier() {
+        let code = Parser::classify_error_code("Expected identifier");
+        assert_eq!(code.as_str(), "E2003");
     }
 
     #[test]
-    fn test_parser_report_error_expected_expression() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Expected expression", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2004");
+    fn test_classify_error_code_expected_expression() {
+        let code = Parser::classify_error_code("Expected expression");
+        assert_eq!(code.as_str(), "E2004");
     }
 
     #[test]
-    fn test_parser_report_error_unexpected_token() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Unexpected token", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2001");
+    fn test_classify_error_code_unexpected_token() {
+        let code = Parser::classify_error_code("Unexpected token");
+        assert_eq!(code.as_str(), "E2001");
     }
 
     #[test]
-    fn test_parser_report_error_expected_token() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Expected token", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2002");
+    fn test_classify_error_code_expected_token() {
+        let code = Parser::classify_error_code("Expected token");
+        assert_eq!(code.as_str(), "E2002");
     }
 
     #[test]
-    fn test_parser_report_error_generic() {
-        let handler = Arc::new(CollectingDiagnosticHandler::new());
-        let (interner, common) = StringInterner::new_with_common_identifiers();
-        let tokens = vec![Token::new(TokenKind::Eof, Span::default())];
-        let arena = Bump::new();
-        let parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
-        let span = Span::new(0, 5, 1, 1);
-        parser.report_error("Some random error", span);
-        let diags = handler.get_diagnostics();
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].code.as_ref().unwrap().as_str(), "E2001");
+    fn test_classify_error_code_generic() {
+        let code = Parser::classify_error_code("Some random error");
+        assert_eq!(code.as_str(), "E2001");
     }
 }
