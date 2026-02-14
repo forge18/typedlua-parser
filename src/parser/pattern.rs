@@ -70,20 +70,20 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     self.advance();
                     Ok(Pattern::Identifier(Spanned::new(id, start_span)))
                 } else {
-                    Err(ParserError {
-                        message: format!(
+                    Err(ParserError::new(
+                        format!(
                             "Internal error: keyword {:?} missing string representation",
                             kind
                         ),
-                        span: start_span,
-                    })
+                        start_span,
+                    ))
                 }
             }
             TokenKind::Number(s) => {
-                let num = s.parse::<f64>().map_err(|_| ParserError {
-                    message: "Invalid number in pattern".to_string(),
-                    span: start_span,
-                })?;
+                let num = s.parse::<f64>().map_err(|_| ParserError::new(
+                    "Invalid number in pattern",
+                    start_span,
+                ))?;
                 self.advance();
                 Ok(Pattern::Literal(Literal::Number(num), start_span))
             }
@@ -107,10 +107,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 let parts_clone = parts.clone();
                 self.parse_template_pattern(parts_clone, start_span)
             }
-            _ => Err(ParserError {
-                message: format!("Unexpected token in pattern: {:?}", self.current().kind),
-                span: start_span,
-            }),
+            _ => Err(ParserError::new(
+                format!("Unexpected token in pattern: {:?}", self.current().kind),
+                start_span,
+            )),
         }
     }
 }
@@ -133,10 +133,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         ident
                     }
                     _ => {
-                        return Err(ParserError {
-                            message: "Expected identifier after '...'".to_string(),
-                            span: self.current_span(),
-                        })
+                        return Err(ParserError::new(
+                            "Expected identifier after '...'",
+                            self.current_span(),
+                        ))
                     }
                 };
                 elements.push(ArrayPatternElement::Rest(name));
@@ -198,10 +198,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         ident
                     }
                     _ => {
-                        return Err(ParserError {
-                            message: "Expected identifier after '...'".to_string(),
-                            span: self.current_span(),
-                        })
+                        return Err(ParserError::new(
+                            "Expected identifier after '...'",
+                            self.current_span(),
+                        ))
                     }
                 };
                 rest = Some(name);
@@ -256,10 +256,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     ident
                 }
                 _ => {
-                    return Err(ParserError {
-                        message: "Expected identifier as object pattern key".to_string(),
-                        span: self.current_span(),
-                    })
+                    return Err(ParserError::new(
+                        "Expected identifier as object pattern key",
+                        self.current_span(),
+                    ))
                 }
             };
 
@@ -331,18 +331,18 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 crate::lexer::TemplatePart::Expression(tokens) => {
                     // Check for adjacent captures
                     if prev_was_capture {
-                        return Err(ParserError {
-                            message: "Adjacent template pattern captures are not supported. Add literal text between captures.".to_string(),
-                            span: start_span,
-                        });
+                        return Err(ParserError::new(
+                            "Adjacent template pattern captures are not supported. Add literal text between captures.",
+                            start_span,
+                        ));
                     }
 
                     // Parse as identifier only
                     if tokens.len() != 1 {
-                        return Err(ParserError {
-                            message: "Template pattern captures must be simple identifiers".to_string(),
-                            span: start_span,
-                        });
+                        return Err(ParserError::new(
+                            "Template pattern captures must be simple identifiers",
+                            start_span,
+                        ));
                     }
 
                     let token = &tokens[0];
@@ -353,10 +353,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             prev_was_capture = true;
                         }
                         _ => {
-                            return Err(ParserError {
-                                message: "Template pattern captures must be simple identifiers".to_string(),
-                                span: token.span,
-                            });
+                            return Err(ParserError::new(
+                                "Template pattern captures must be simple identifiers",
+                                token.span,
+                            ));
                         }
                     }
                 }
@@ -397,10 +397,10 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
-        let tokens = lexer.tokenize().map_err(|e| ParserError {
-            message: format!("Lexer error: {:?}", e),
-            span: Span::default(),
-        })?;
+        let tokens = lexer.tokenize().map_err(|e| ParserError::new(
+            format!("Lexer error: {:?}", e),
+            Span::default(),
+        ))?;
         let arena = Box::leak(Box::new(Bump::new()));
         let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_pattern()

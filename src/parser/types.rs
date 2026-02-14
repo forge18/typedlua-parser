@@ -217,10 +217,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
             // Literal types
             TokenKind::Number(s) => {
-                let num = s.parse::<f64>().map_err(|_| ParserError {
-                    message: "Invalid number in type".to_string(),
-                    span: start_span,
-                })?;
+                let num = s.parse::<f64>().map_err(|_| ParserError::new(
+                    "Invalid number in type",
+                    start_span,
+                ))?;
                 self.advance();
                 Ok(Type {
                     kind: TypeKind::Literal(Literal::Number(num)),
@@ -336,10 +336,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
 
             // Parenthesized type: (T)
-            _ => Err(ParserError {
-                message: format!("Unexpected token in type: {:?}", self.current().kind),
-                span: start_span,
-            }),
+            _ => Err(ParserError::new(
+                format!("Unexpected token in type: {:?}", self.current().kind),
+                start_span,
+            )),
         }
     }
 
@@ -602,10 +602,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
             // Check if this is actually a function type (should have -> or =>)
             if !self.check(&TokenKind::Arrow) && !self.check(&TokenKind::FatArrow) {
-                return Err(ParserError {
-                    message: "Not a function type".to_string(),
-                    span: start_span,
-                });
+                return Err(ParserError::new(
+                    "Not a function type",
+                    start_span,
+                ));
             }
 
             // Accept both -> and => for function type arrow
@@ -701,10 +701,10 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
-        let tokens = lexer.tokenize().map_err(|e| ParserError {
-            message: format!("Lexer error: {:?}", e),
-            span: Span::default(),
-        })?;
+        let tokens = lexer.tokenize().map_err(|e| ParserError::new(
+            format!("Lexer error: {:?}", e),
+            Span::default(),
+        ))?;
         let arena = Box::leak(Box::new(Bump::new()));
         let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_type()
