@@ -173,6 +173,44 @@ impl DirtyRegionSet {
             _ => None,
         }
     }
+
+    /// Calculate ratio of affected statements to total statements
+    ///
+    /// This is used by heuristics to decide if incremental parsing is worthwhile.
+    /// For example, if >50% of statements are affected, a full reparse is often faster.
+    ///
+    /// # Arguments
+    /// * `total_statements` - Total number of statements in the document
+    ///
+    /// # Returns
+    /// Ratio between 0.0 and 1.0 representing the fraction of statements affected
+    pub fn affected_ratio(&self, total_statements: usize) -> f64 {
+        if total_statements == 0 {
+            return 0.0;
+        }
+
+        // Collect unique affected statement indices
+        let mut affected = std::collections::HashSet::<usize>::new();
+        for region in &self.regions {
+            affected.extend(region.affected_statements.iter().copied());
+        }
+
+        affected.len() as f64 / total_statements as f64
+    }
+
+    /// Check if incremental parsing is worthwhile based on affected ratio
+    ///
+    /// This is a helper for parse strategy heuristics.
+    ///
+    /// # Arguments
+    /// * `total_statements` - Total number of statements in the document
+    /// * `threshold` - Maximum acceptable ratio (typically 0.5 for 50%)
+    ///
+    /// # Returns
+    /// `true` if incremental parsing should be used, `false` if full reparse is better
+    pub fn should_use_incremental(&self, total_statements: usize, threshold: f64) -> bool {
+        self.affected_ratio(total_statements) < threshold
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +347,574 @@ mod tests {
 
         assert_eq!(dirty.regions.len(), 1);
         assert_eq!(dirty.regions[0].affected_statements, vec![0, 1, 2]);
+    }
+
+    // --- NEW TESTS FOR EDGE CASES ---
+
+    #[test]
+    fn test_edit_at_file_start() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Edit at byte 0 (start of file)
+        let edits = vec![TextEdit {
+            range: (0, 0),
+            new_text: "prefix ".to_string(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0]);
+        assert_eq!(dirty.total_delta, 7);
+    }
+
+    #[test]
+    fn test_edit_at_file_end() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Edit at byte 20 (end of last statement)
+        let edits = vec![TextEdit {
+            range: (20, 20),
+            new_text: "\nsuffix".to_string(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        // Edit after all statements - no statements affected
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, Vec::<usize>::new());
+        assert_eq!(dirty.total_delta, 7);
+    }
+
+    #[test]
+    fn test_edit_deletes_entire_statement() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+            (
+                2,
+                Span {
+                    start: 20,
+                    end: 30,
+                    line: 3,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Delete entire statement 1
+        let edits = vec![TextEdit {
+            range: (10, 20),
+            new_text: String::new(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![1]);
+        assert_eq!(dirty.total_delta, -10);
+    }
+
+    #[test]
+    fn test_edit_deletes_multiple_statements() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+            (
+                2,
+                Span {
+                    start: 20,
+                    end: 30,
+                    line: 3,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Delete statements 0 and 1 completely
+        let edits = vec![TextEdit {
+            range: (0, 20),
+            new_text: String::new(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0, 1]);
+        assert_eq!(dirty.total_delta, -20);
+    }
+
+    // --- NEW TESTS FOR MULTIPLE EDITS ---
+
+    #[test]
+    fn test_multiple_non_overlapping_edits() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+            (
+                2,
+                Span {
+                    start: 20,
+                    end: 30,
+                    line: 3,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Edit in stmt 0 and stmt 2 (not overlapping)
+        let edits = vec![
+            TextEdit {
+                range: (5, 5),
+                new_text: "a".to_string(),
+            },
+            TextEdit {
+                range: (25, 25),
+                new_text: "b".to_string(),
+            },
+        ];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 2);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0]);
+        assert_eq!(dirty.regions[1].affected_statements, vec![2]);
+        assert_eq!(dirty.total_delta, 2);
+    }
+
+    #[test]
+    fn test_multiple_overlapping_edits_merge() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Two overlapping edits in stmt 0
+        let edits = vec![
+            TextEdit {
+                range: (3, 5),
+                new_text: "abc".to_string(),
+            },
+            TextEdit {
+                range: (4, 7),
+                new_text: "def".to_string(),
+            },
+        ];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        // Should merge into one region
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0]);
+    }
+
+    #[test]
+    fn test_adjacent_edits_merge() {
+        let statement_ranges = vec![(
+            0,
+            Span {
+                start: 0,
+                end: 20,
+                line: 1,
+                column: 0,
+            },
+        )];
+
+        // Two adjacent insertions
+        let edits = vec![
+            TextEdit {
+                range: (5, 5),
+                new_text: "a".to_string(),
+            },
+            TextEdit {
+                range: (6, 6), // Adjacent after first edit
+                new_text: "b".to_string(),
+            },
+        ];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        // Should merge because they're adjacent
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.total_delta, 2);
+    }
+
+    #[test]
+    fn test_three_way_edit_merge() {
+        let statement_ranges = vec![(
+            0,
+            Span {
+                start: 0,
+                end: 30,
+                line: 1,
+                column: 0,
+            },
+        )];
+
+        // Three overlapping edits
+        let edits = vec![
+            TextEdit {
+                range: (5, 10),
+                new_text: "a".to_string(),
+            },
+            TextEdit {
+                range: (8, 12),
+                new_text: "b".to_string(),
+            },
+            TextEdit {
+                range: (11, 15),
+                new_text: "c".to_string(),
+            },
+        ];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        // All should merge into one region
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0]);
+    }
+
+    // --- NEW TESTS FOR BOUNDARY CONDITIONS ---
+
+    #[test]
+    fn test_edit_ends_at_statement_boundary() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Edit ends exactly at boundary between stmt 0 and stmt 1
+        let edits = vec![TextEdit {
+            range: (5, 10),
+            new_text: "x".to_string(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0]);
+    }
+
+    #[test]
+    fn test_edit_starts_at_statement_boundary() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Edit starts exactly at boundary between stmt 0 and stmt 1
+        let edits = vec![TextEdit {
+            range: (10, 15),
+            new_text: "x".to_string(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![1]);
+    }
+
+    #[test]
+    fn test_zero_length_edit_insertion() {
+        let statement_ranges = vec![(
+            0,
+            Span {
+                start: 0,
+                end: 10,
+                line: 1,
+                column: 0,
+            },
+        )];
+
+        // Pure insertion (zero-length range)
+        let edits = vec![TextEdit {
+            range: (5, 5),
+            new_text: "inserted".to_string(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![0]);
+        assert_eq!(dirty.total_delta, 8);
+    }
+
+    #[test]
+    fn test_full_statement_replacement() {
+        let statement_ranges = vec![
+            (
+                0,
+                Span {
+                    start: 0,
+                    end: 10,
+                    line: 1,
+                    column: 0,
+                },
+            ),
+            (
+                1,
+                Span {
+                    start: 10,
+                    end: 20,
+                    line: 2,
+                    column: 0,
+                },
+            ),
+        ];
+
+        // Replace entire statement 1 with different text
+        let edits = vec![TextEdit {
+            range: (10, 20),
+            new_text: "const y: number = 99".to_string(),
+        }];
+
+        let dirty = DirtyRegionSet::calculate(&edits, &statement_ranges);
+
+        assert_eq!(dirty.regions.len(), 1);
+        assert_eq!(dirty.regions[0].affected_statements, vec![1]);
+        assert_eq!(dirty.total_delta, 10); // 20 new - 10 old
+    }
+
+    // --- NEW TESTS FOR RATIO CALCULATION ---
+
+    #[test]
+    fn test_affected_ratio_zero_statements() {
+        let dirty = DirtyRegionSet {
+            regions: vec![],
+            total_delta: 0,
+        };
+
+        assert_eq!(dirty.affected_ratio(0), 0.0);
+    }
+
+    #[test]
+    fn test_affected_ratio_single_statement() {
+        let dirty = DirtyRegionSet {
+            regions: vec![DirtyRegion {
+                modified_range: (5, 10),
+                affected_statements: vec![0],
+                byte_delta: 5,
+            }],
+            total_delta: 5,
+        };
+
+        assert_eq!(dirty.affected_ratio(3), 1.0 / 3.0);
+    }
+
+    #[test]
+    fn test_affected_ratio_multiple_statements() {
+        let dirty = DirtyRegionSet {
+            regions: vec![DirtyRegion {
+                modified_range: (5, 25),
+                affected_statements: vec![0, 1, 2],
+                byte_delta: 10,
+            }],
+            total_delta: 10,
+        };
+
+        // 3 affected out of 10 total = 0.3
+        assert_eq!(dirty.affected_ratio(10), 0.3);
+    }
+
+    #[test]
+    fn test_affected_ratio_duplicate_statements() {
+        // Two regions affecting the same statement
+        let dirty = DirtyRegionSet {
+            regions: vec![
+                DirtyRegion {
+                    modified_range: (5, 10),
+                    affected_statements: vec![0, 1],
+                    byte_delta: 5,
+                },
+                DirtyRegion {
+                    modified_range: (15, 20),
+                    affected_statements: vec![1, 2],
+                    byte_delta: 5,
+                },
+            ],
+            total_delta: 10,
+        };
+
+        // Unique affected: {0, 1, 2} = 3 out of 5 = 0.6
+        assert_eq!(dirty.affected_ratio(5), 0.6);
+    }
+
+    #[test]
+    fn test_should_use_incremental_below_threshold() {
+        let dirty = DirtyRegionSet {
+            regions: vec![DirtyRegion {
+                modified_range: (5, 10),
+                affected_statements: vec![0],
+                byte_delta: 5,
+            }],
+            total_delta: 5,
+        };
+
+        // 1 affected out of 10 = 0.1, threshold 0.5 -> should use incremental
+        assert!(dirty.should_use_incremental(10, 0.5));
+    }
+
+    #[test]
+    fn test_should_use_incremental_above_threshold() {
+        let dirty = DirtyRegionSet {
+            regions: vec![DirtyRegion {
+                modified_range: (5, 25),
+                affected_statements: vec![0, 1, 2, 3, 4, 5],
+                byte_delta: 20,
+            }],
+            total_delta: 20,
+        };
+
+        // 6 affected out of 10 = 0.6, threshold 0.5 -> should NOT use incremental
+        assert!(!dirty.should_use_incremental(10, 0.5));
+    }
+
+    #[test]
+    fn test_should_use_incremental_at_threshold() {
+        let dirty = DirtyRegionSet {
+            regions: vec![DirtyRegion {
+                modified_range: (5, 25),
+                affected_statements: vec![0, 1, 2, 3, 4],
+                byte_delta: 20,
+            }],
+            total_delta: 20,
+        };
+
+        // 5 affected out of 10 = 0.5, threshold 0.5 -> should NOT use incremental (not strictly less)
+        assert!(!dirty.should_use_incremental(10, 0.5));
     }
 }

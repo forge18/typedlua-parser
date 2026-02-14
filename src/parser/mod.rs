@@ -343,6 +343,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     /// Parse a single statement at a specific byte offset
     ///
     /// Seeks the parser position to the correct token and parses a statement
+    #[allow(dead_code)]
     fn parse_statement_at_offset(
         &mut self,
         byte_offset: usize,

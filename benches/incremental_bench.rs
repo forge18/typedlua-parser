@@ -191,5 +191,368 @@ fn bench_multiline_paste(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_single_char_edit, bench_line_deletion, bench_multiline_paste);
+/// Very large file (10,000 lines) benchmark
+fn bench_very_large_file(c: &mut Criterion) {
+    let mut group = c.benchmark_group("very_large_file");
+    group.sample_size(10); // Reduce sample size for expensive benchmark
+
+    let size = 10000;
+    let source = generate_source(size);
+    let (interner, common) = StringInterner::new_with_common_identifiers();
+    let interner = Arc::new(interner);
+
+    group.bench_function("full_parse", |b| {
+        b.iter(|| {
+            let arena = Bump::new();
+            let handler = Arc::new(CollectingDiagnosticHandler::new());
+            let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+            let tokens = lexer.tokenize().unwrap();
+            let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+            black_box(parser.parse().unwrap());
+        });
+    });
+
+    group.bench_function("incremental_parse", |b| {
+        // Setup: initial parse
+        let arena1 = Box::leak(Box::new(Bump::new()));
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena1);
+        let (_, tree) = parser.parse_incremental(None, &[], &source).unwrap();
+
+        // Edit in the middle
+        let edit_pos = source.find("var5000 = 5000").unwrap() + 13;
+        let mut edited_source = source.clone();
+        edited_source.replace_range(edit_pos..edit_pos + 1, "1");
+        let edits = vec![TextEdit {
+            range: (edit_pos as u32, (edit_pos + 1) as u32),
+            new_text: "1".to_string(),
+        }];
+
+        let static_tree: &'static luanext_parser::incremental::IncrementalParseTree<'static> =
+            unsafe { std::mem::transmute(&tree) };
+
+        b.iter(|| {
+            let arena2 = Bump::new();
+            let mut parser2 = Parser::new(vec![], handler.clone(), &interner, &common, &arena2);
+            black_box(
+                parser2
+                    .parse_incremental(Some(static_tree), &edits, &edited_source)
+                    .unwrap(),
+            );
+        });
+    });
+
+    group.finish();
+}
+
+/// Small file (10 lines) benchmark
+fn bench_small_file(c: &mut Criterion) {
+    let mut group = c.benchmark_group("small_file");
+
+    let size = 10;
+    let source = generate_source(size);
+    let (interner, common) = StringInterner::new_with_common_identifiers();
+    let interner = Arc::new(interner);
+
+    group.bench_function("full_parse", |b| {
+        b.iter(|| {
+            let arena = Bump::new();
+            let handler = Arc::new(CollectingDiagnosticHandler::new());
+            let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+            let tokens = lexer.tokenize().unwrap();
+            let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+            black_box(parser.parse().unwrap());
+        });
+    });
+
+    group.bench_function("incremental_parse", |b| {
+        // Setup: initial parse
+        let arena1 = Box::leak(Box::new(Bump::new()));
+        let handler = Arc::new(CollectingDiagnosticHandler::new());
+        let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+        let tokens = lexer.tokenize().unwrap();
+        let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena1);
+        let (_, tree) = parser.parse_incremental(None, &[], &source).unwrap();
+
+        // Edit at end
+        let edit_pos = source.len();
+        let mut edited_source = source.clone();
+        edited_source.push_str("\nlocal new = 999");
+        let edits = vec![TextEdit {
+            range: (edit_pos as u32, edit_pos as u32),
+            new_text: "\nlocal new = 999".to_string(),
+        }];
+
+        let static_tree: &'static luanext_parser::incremental::IncrementalParseTree<'static> =
+            unsafe { std::mem::transmute(&tree) };
+
+        b.iter(|| {
+            let arena2 = Bump::new();
+            let mut parser2 = Parser::new(vec![], handler.clone(), &interner, &common, &arena2);
+            black_box(
+                parser2
+                    .parse_incremental(Some(static_tree), &edits, &edited_source)
+                    .unwrap(),
+            );
+        });
+    });
+
+    group.finish();
+}
+
+/// Append to end of file (typing at EOF)
+fn bench_append_to_end(c: &mut Criterion) {
+    let mut group = c.benchmark_group("append_to_end");
+
+    for size in [100, 500, 1000].iter() {
+        let source = generate_source(*size);
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let interner = Arc::new(interner);
+
+        group.bench_with_input(BenchmarkId::new("full_parse", size), size, |b, _| {
+            b.iter(|| {
+                let arena = Bump::new();
+                let handler = Arc::new(CollectingDiagnosticHandler::new());
+                let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+                let tokens = lexer.tokenize().unwrap();
+                let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+                black_box(parser.parse().unwrap());
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("incremental_parse", size), size, |b, _| {
+            // Setup: initial parse
+            let arena1 = Box::leak(Box::new(Bump::new()));
+            let handler = Arc::new(CollectingDiagnosticHandler::new());
+            let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+            let tokens = lexer.tokenize().unwrap();
+            let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena1);
+            let (_, tree) = parser.parse_incremental(None, &[], &source).unwrap();
+
+            // Append at end
+            let edit_pos = source.len();
+            let mut edited_source = source.clone();
+            edited_source.push_str("\nlocal appended = 999");
+            let edits = vec![TextEdit {
+                range: (edit_pos as u32, edit_pos as u32),
+                new_text: "\nlocal appended = 999".to_string(),
+            }];
+
+            let static_tree: &'static luanext_parser::incremental::IncrementalParseTree<'static> =
+                unsafe { std::mem::transmute(&tree) };
+
+            b.iter(|| {
+                let arena2 = Bump::new();
+                let mut parser2 = Parser::new(vec![], handler.clone(), &interner, &common, &arena2);
+                black_box(
+                    parser2
+                        .parse_incremental(Some(static_tree), &edits, &edited_source)
+                        .unwrap(),
+                );
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Edit at start of file
+fn bench_edit_at_start(c: &mut Criterion) {
+    let mut group = c.benchmark_group("edit_at_start");
+
+    for size in [100, 500, 1000].iter() {
+        let source = generate_source(*size);
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let interner = Arc::new(interner);
+
+        group.bench_with_input(BenchmarkId::new("full_parse", size), size, |b, _| {
+            b.iter(|| {
+                let arena = Bump::new();
+                let handler = Arc::new(CollectingDiagnosticHandler::new());
+                let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+                let tokens = lexer.tokenize().unwrap();
+                let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+                black_box(parser.parse().unwrap());
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("incremental_parse", size), size, |b, _| {
+            // Setup: initial parse
+            let arena1 = Box::leak(Box::new(Bump::new()));
+            let handler = Arc::new(CollectingDiagnosticHandler::new());
+            let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+            let tokens = lexer.tokenize().unwrap();
+            let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena1);
+            let (_, tree) = parser.parse_incremental(None, &[], &source).unwrap();
+
+            // Edit first line
+            let mut edited_source = source.clone();
+            edited_source.replace_range(0..1, "x");
+            let edits = vec![TextEdit {
+                range: (0, 1),
+                new_text: "x".to_string(),
+            }];
+
+            let static_tree: &'static luanext_parser::incremental::IncrementalParseTree<'static> =
+                unsafe { std::mem::transmute(&tree) };
+
+            b.iter(|| {
+                let arena2 = Bump::new();
+                let mut parser2 = Parser::new(vec![], handler.clone(), &interner, &common, &arena2);
+                black_box(
+                    parser2
+                        .parse_incremental(Some(static_tree), &edits, &edited_source)
+                        .unwrap(),
+                );
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Multi-statement deletion (delete 10 lines)
+fn bench_multistatement_deletion(c: &mut Criterion) {
+    let mut group = c.benchmark_group("multistatement_deletion");
+
+    for size in [100, 500, 1000].iter() {
+        let source = generate_source(*size);
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let interner = Arc::new(interner);
+
+        group.bench_with_input(BenchmarkId::new("full_parse", size), size, |b, _| {
+            b.iter(|| {
+                let arena = Bump::new();
+                let handler = Arc::new(CollectingDiagnosticHandler::new());
+                let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+                let tokens = lexer.tokenize().unwrap();
+                let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+                black_box(parser.parse().unwrap());
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("incremental_parse", size), size, |b, _| {
+            // Setup: initial parse
+            let arena1 = Box::leak(Box::new(Bump::new()));
+            let handler = Arc::new(CollectingDiagnosticHandler::new());
+            let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+            let tokens = lexer.tokenize().unwrap();
+            let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena1);
+            let (_, tree) = parser.parse_incremental(None, &[], &source).unwrap();
+
+            // Delete lines 40-50 (10 lines)
+            let start_line = 40;
+            let end_line = 50;
+            let line_start = source.lines().take(start_line).map(|l| l.len() + 1).sum::<usize>();
+            let line_end = source.lines().take(end_line).map(|l| l.len() + 1).sum::<usize>();
+            let mut edited_source = source.clone();
+            edited_source.replace_range(line_start..line_end, "");
+            let edits = vec![TextEdit {
+                range: (line_start as u32, line_end as u32),
+                new_text: String::new(),
+            }];
+
+            let static_tree: &'static luanext_parser::incremental::IncrementalParseTree<'static> =
+                unsafe { std::mem::transmute(&tree) };
+
+            b.iter(|| {
+                let arena2 = Bump::new();
+                let mut parser2 = Parser::new(vec![], handler.clone(), &interner, &common, &arena2);
+                black_box(
+                    parser2
+                        .parse_incremental(Some(static_tree), &edits, &edited_source)
+                        .unwrap(),
+                );
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Format document (whitespace changes throughout)
+fn bench_format_document(c: &mut Criterion) {
+    let mut group = c.benchmark_group("format_document");
+
+    for size in [100, 500, 1000].iter() {
+        let source = generate_source(*size);
+        let (interner, common) = StringInterner::new_with_common_identifiers();
+        let interner = Arc::new(interner);
+
+        group.bench_with_input(BenchmarkId::new("full_parse", size), size, |b, _| {
+            b.iter(|| {
+                let arena = Bump::new();
+                let handler = Arc::new(CollectingDiagnosticHandler::new());
+                let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+                let tokens = lexer.tokenize().unwrap();
+                let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
+                black_box(parser.parse().unwrap());
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("incremental_parse", size), size, |b, _| {
+            // Setup: initial parse
+            let arena1 = Box::leak(Box::new(Bump::new()));
+            let handler = Arc::new(CollectingDiagnosticHandler::new());
+            let mut lexer = Lexer::new(&source, handler.clone(), &interner);
+            let tokens = lexer.tokenize().unwrap();
+            let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, arena1);
+            let (_, tree) = parser.parse_incremental(None, &[], &source).unwrap();
+
+            // Format: add spaces around "=" in first 10 lines
+            let mut edited_source = source.clone();
+            let mut edits = Vec::new();
+            let mut offset = 0;
+
+            for (i, line) in source.lines().take(10).enumerate() {
+                if let Some(eq_pos) = line.find('=') {
+                    let abs_pos = offset + eq_pos;
+                    // Insert space before =
+                    edited_source.insert(abs_pos + i * 2, ' ');
+                    edits.push(TextEdit {
+                        range: (abs_pos as u32, abs_pos as u32),
+                        new_text: " ".to_string(),
+                    });
+                    // Insert space after =
+                    edited_source.insert(abs_pos + i * 2 + 2, ' ');
+                    edits.push(TextEdit {
+                        range: ((abs_pos + 1) as u32, (abs_pos + 1) as u32),
+                        new_text: " ".to_string(),
+                    });
+                }
+                offset += line.len() + 1;
+            }
+
+            let static_tree: &'static luanext_parser::incremental::IncrementalParseTree<'static> =
+                unsafe { std::mem::transmute(&tree) };
+
+            b.iter(|| {
+                let arena2 = Bump::new();
+                let mut parser2 = Parser::new(vec![], handler.clone(), &interner, &common, &arena2);
+                black_box(
+                    parser2
+                        .parse_incremental(Some(static_tree), &edits, &edited_source)
+                        .unwrap(),
+                );
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_single_char_edit,
+    bench_line_deletion,
+    bench_multiline_paste,
+    bench_very_large_file,
+    bench_small_file,
+    bench_append_to_end,
+    bench_edit_at_start,
+    bench_multistatement_deletion,
+    bench_format_document
+);
 criterion_main!(benches);

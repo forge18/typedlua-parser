@@ -73,4 +73,141 @@ mod tests {
         // Edit starts exactly at statement end - no overlap
         assert!(is_statement_clean(&stmt, &edits));
     }
+
+    // --- NEW TESTS FOR OFFSET ADJUSTMENT ---
+
+    #[test]
+    fn test_statement_clean_after_insertion() {
+        let stmt = Statement::Break(Span::new(20, 25, 1, 1));
+        // Insertion before the statement
+        let edits = vec![TextEdit {
+            range: (10, 10),
+            new_text: "inserted text".to_string(),
+        }];
+
+        // Statement is after the edit, so it's clean (no overlap)
+        assert!(is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_statement_dirty_after_overlapping_deletion() {
+        let stmt = Statement::Break(Span::new(10, 20, 1, 1));
+        // Deletion overlaps statement
+        let edits = vec![TextEdit {
+            range: (15, 25),
+            new_text: String::new(),
+        }];
+
+        assert!(!is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_statement_clean_before_edit() {
+        let stmt = Statement::Break(Span::new(0, 10, 1, 1));
+        // Edit is after the statement
+        let edits = vec![TextEdit {
+            range: (20, 25),
+            new_text: "modified".to_string(),
+        }];
+
+        assert!(is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_statement_dirty_when_edit_inside() {
+        let stmt = Statement::Break(Span::new(10, 30, 1, 1));
+        // Edit is completely inside the statement
+        let edits = vec![TextEdit {
+            range: (15, 20),
+            new_text: "x".to_string(),
+        }];
+
+        assert!(!is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_sequential_edits_overlap_detection() {
+        let stmt = Statement::Break(Span::new(10, 20, 1, 1));
+        // Multiple edits, one overlaps
+        let edits = vec![
+            TextEdit {
+                range: (0, 5),
+                new_text: "a".to_string(),
+            },
+            TextEdit {
+                range: (15, 17), // Overlaps statement
+                new_text: "b".to_string(),
+            },
+            TextEdit {
+                range: (30, 35),
+                new_text: "c".to_string(),
+            },
+        ];
+
+        assert!(!is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_replacement_edit_overlap() {
+        let stmt = Statement::Break(Span::new(10, 20, 1, 1));
+        // Replace text that partially overlaps
+        let edits = vec![TextEdit {
+            range: (18, 25),
+            new_text: "replaced".to_string(),
+        }];
+
+        assert!(!is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_edit_exactly_at_statement_end_no_overlap() {
+        let stmt = Statement::Break(Span::new(10, 20, 1, 1));
+        // Edit starts exactly where statement ends
+        let edits = vec![TextEdit {
+            range: (20, 20),
+            new_text: "suffix".to_string(),
+        }];
+
+        // No overlap - edit is after statement
+        assert!(is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_edit_one_char_before_statement_no_overlap() {
+        let stmt = Statement::Break(Span::new(10, 20, 1, 1));
+        // Edit ends exactly where statement starts
+        let edits = vec![TextEdit {
+            range: (5, 10),
+            new_text: "prefix".to_string(),
+        }];
+
+        // No overlap - edit is before statement
+        assert!(is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_empty_edits_all_statements_clean() {
+        let stmt = Statement::Break(Span::new(10, 20, 1, 1));
+        let edits: Vec<TextEdit> = vec![];
+
+        // No edits means all statements are clean
+        assert!(is_statement_clean(&stmt, &edits));
+    }
+
+    #[test]
+    fn test_large_edit_affects_all_statements() {
+        let stmt1 = Statement::Break(Span::new(0, 10, 1, 1));
+        let stmt2 = Statement::Break(Span::new(10, 20, 2, 1));
+        let stmt3 = Statement::Break(Span::new(20, 30, 3, 1));
+
+        // Large edit spans entire document
+        let edits = vec![TextEdit {
+            range: (0, 100),
+            new_text: "completely replaced".to_string(),
+        }];
+
+        assert!(!is_statement_clean(&stmt1, &edits));
+        assert!(!is_statement_clean(&stmt2, &edits));
+        assert!(!is_statement_clean(&stmt3, &edits));
+    }
 }
