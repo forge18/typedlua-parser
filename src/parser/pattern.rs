@@ -4,6 +4,7 @@ use crate::ast::expression::Literal;
 use crate::ast::pattern::*;
 use crate::ast::Spanned;
 use crate::lexer::TokenKind;
+use crate::span::Span;
 
 pub trait PatternParser<'arena> {
     fn parse_pattern(&mut self) -> Result<Pattern<'arena>, ParserError>;
@@ -101,6 +102,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 // Variadic parameter: ...
                 self.advance();
                 Ok(Pattern::Wildcard(start_span))
+            }
+            TokenKind::TemplateString(parts) => {
+                let parts_clone = parts.clone();
+                self.parse_template_pattern(parts_clone, start_span)
             }
             _ => Err(ParserError {
                 message: format!("Unexpected token in pattern: {:?}", self.current().kind),
@@ -302,6 +307,78 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             properties,
             rest,
             span: start_span.combine(&end_span),
+        }))
+    }
+
+    fn parse_template_pattern(
+        &mut self,
+        parts: Vec<crate::lexer::TemplatePart>,
+        start_span: Span,
+    ) -> Result<Pattern<'arena>, ParserError> {
+        use crate::ast::pattern::TemplatePatternPart;
+
+        self.advance(); // Consume the template string token
+
+        let mut pattern_parts = Vec::new();
+        let mut prev_was_capture = false;
+
+        for part in parts {
+            match part {
+                crate::lexer::TemplatePart::String(s) => {
+                    pattern_parts.push(TemplatePatternPart::String(s));
+                    prev_was_capture = false;
+                }
+                crate::lexer::TemplatePart::Expression(tokens) => {
+                    // Check for adjacent captures
+                    if prev_was_capture {
+                        return Err(ParserError {
+                            message: "Adjacent template pattern captures are not supported. Add literal text between captures.".to_string(),
+                            span: start_span,
+                        });
+                    }
+
+                    // Parse as identifier only
+                    if tokens.len() != 1 {
+                        return Err(ParserError {
+                            message: "Template pattern captures must be simple identifiers".to_string(),
+                            span: start_span,
+                        });
+                    }
+
+                    let token = &tokens[0];
+                    match &token.kind {
+                        TokenKind::Identifier(id) => {
+                            let ident = Spanned::new(*id, token.span);
+                            pattern_parts.push(TemplatePatternPart::Capture(ident));
+                            prev_was_capture = true;
+                        }
+                        _ => {
+                            return Err(ParserError {
+                                message: "Template pattern captures must be simple identifiers".to_string(),
+                                span: token.span,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // If no captures, convert to literal pattern
+        if pattern_parts.iter().all(|p| matches!(p, TemplatePatternPart::String(_))) {
+            let combined: String = pattern_parts
+                .into_iter()
+                .filter_map(|p| match p {
+                    TemplatePatternPart::String(s) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            return Ok(Pattern::Literal(Literal::String(combined), start_span));
+        }
+
+        let parts_arena = self.alloc_vec(pattern_parts);
+        Ok(Pattern::Template(crate::ast::pattern::TemplatePattern {
+            parts: parts_arena,
+            span: start_span,
         }))
     }
 }

@@ -13,6 +13,8 @@ pub enum Pattern<'arena> {
     Wildcard(Span),
     #[serde(borrow)]
     Or(OrPattern<'arena>),
+    #[serde(borrow)]
+    Template(TemplatePattern<'arena>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,6 +22,19 @@ pub struct OrPattern<'arena> {
     #[serde(borrow)]
     pub alternatives: &'arena [Pattern<'arena>],
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplatePattern<'arena> {
+    #[serde(borrow)]
+    pub parts: &'arena [TemplatePatternPart],
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum TemplatePatternPart {
+    String(String),
+    Capture(Ident),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +89,7 @@ impl<'arena> Pattern<'arena> {
             Pattern::Object(obj) => obj.span,
             Pattern::Wildcard(span) => *span,
             Pattern::Or(or) => or.span,
+            Pattern::Template(template) => template.span,
         }
     }
 
