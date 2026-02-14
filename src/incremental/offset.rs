@@ -3,9 +3,20 @@
 use crate::incremental::dirty::TextEdit;
 use crate::span::Span;
 
-/// Adjust a span's offsets based on text edits
+/// Adjust a span's byte offsets to account for preceding text edits.
 ///
-/// Returns None if the span overlaps with an edit (requires re-parse)
+/// Iterates through edits in order and applies one of three cases per edit:
+///
+/// 1. **Span before edit** (`span.end <= edit_start`): No adjustment needed —
+///    the edit is after this span and doesn't affect its position.
+/// 2. **Span after edit** (`span.start >= edit_end`): Shift the span by the
+///    edit's byte delta (positive for insertions, negative for deletions).
+/// 3. **Span overlaps edit**: The span is invalidated — return `None` because
+///    the statement must be re-parsed.
+///
+/// # Returns
+/// - `Some(adjusted_span)` if the span can be safely relocated
+/// - `None` if the span overlaps an edit and is invalidated
 pub fn adjust_span(span: &Span, edits: &[TextEdit]) -> Option<Span> {
     let mut adjusted = *span;
 

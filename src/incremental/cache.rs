@@ -4,10 +4,10 @@ use crate::ast::statement::Statement;
 use crate::lexer::Token;
 use crate::span::Span;
 use bumpalo::Bump;
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::FxHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::rc::Rc;
 
 /// A cached statement with hash validation and token stream
 #[derive(Clone)]
@@ -52,9 +52,9 @@ impl<'arena> CachedStatement<'arena> {
         }
     }
 
-    /// Hash source text using DefaultHasher
+    /// Hash source text using FxHasher (faster than DefaultHasher for this use case)
     fn hash_source(text: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         text.hash(&mut hasher);
         hasher.finish()
     }
@@ -77,11 +77,21 @@ impl<'arena> CachedStatement<'arena> {
     }
 }
 
-/// Incremental parse tree with multi-arena support
+/// Incremental parse tree with multi-arena support.
 ///
-/// Uses multiple arenas to track statements across incremental parses.
-/// Old statements stay in old arenas, new statements allocated in new arenas.
-/// Periodic consolidation prevents unbounded arena accumulation.
+/// Tracks cached statements across incremental parses. Each parse may allocate
+/// a new arena for re-parsed statements while keeping clean statements in their
+/// original arenas. When arenas exceed the limit (3) or every 10 versions,
+/// `collect_garbage()` consolidates all statements into a single fresh arena.
+///
+/// # Arena lifecycle
+///
+/// ```text
+/// Parse 1: [Arena 0] ← all statements
+/// Parse 2: [Arena 0, Arena 1] ← clean stmts in 0, re-parsed in 1
+/// Parse 3: [Arena 0, Arena 1, Arena 2]
+/// Parse 4: [Arena 3] ← consolidation triggered (>3 arenas)
+/// ```
 pub struct IncrementalParseTree<'arena> {
     /// Document version this tree corresponds to
     pub version: u64,
@@ -90,7 +100,7 @@ pub struct IncrementalParseTree<'arena> {
     /// Hash of entire source file (for quick full-file validation)
     pub source_hash: u64,
     /// Multiple arenas - max 3, consolidated when limit hit
-    pub arenas: Vec<Arc<Bump>>,
+    pub arenas: Vec<Rc<Bump>>,
 }
 
 impl<'arena> IncrementalParseTree<'arena> {
@@ -99,7 +109,7 @@ impl<'arena> IncrementalParseTree<'arena> {
         version: u64,
         statements: &'arena [Statement<'arena>],
         source: &str,
-        arena: Arc<Bump>,
+        arena: Rc<Bump>,
     ) -> Self {
         let cached_statements = statements
             .iter()
@@ -118,7 +128,7 @@ impl<'arena> IncrementalParseTree<'arena> {
 
     /// Hash the full source file
     fn hash_full_source(source: &str) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         source.hash(&mut hasher);
         hasher.finish()
     }
@@ -134,7 +144,7 @@ impl<'arena> IncrementalParseTree<'arena> {
         // Trigger consolidation if:
         // 1. More than 3 arenas
         // 2. Every 10 parses
-        let should_consolidate = self.arenas.len() > 3 || self.version % 10 == 0;
+        let should_consolidate = self.arenas.len() > 3 || self.version.is_multiple_of(10);
 
         if should_consolidate {
             self.consolidate_all();
@@ -149,7 +159,7 @@ impl<'arena> IncrementalParseTree<'arena> {
             return; // Nothing to consolidate
         }
 
-        let new_arena = Arc::new(Bump::new());
+        let new_arena = Rc::new(Bump::new());
 
         // Clone all statements to new arena
         let new_statements = self
@@ -160,7 +170,7 @@ impl<'arena> IncrementalParseTree<'arena> {
 
                 // Transmute to 'arena lifetime for storage
                 let static_cloned: &'arena Statement<'arena> =
-                    unsafe { std::mem::transmute(cloned) };
+                    unsafe { std::mem::transmute::<&Statement<'_>, &Statement<'_>>(cloned) };
 
                 CachedStatement {
                     statement: static_cloned,
@@ -212,7 +222,7 @@ impl<'arena> IncrementalParseTree<'arena> {
 /// This is safe because:
 /// 1. We perform a deep clone of the statement, creating new owned data
 /// 2. The cloned data is transmuted to the new lifetime parameter
-/// 3. The arena is kept alive via Arc<Bump> in IncrementalParseTree
+/// 3. The arena is kept alive via Rc<Bump> in IncrementalParseTree
 /// 4. Statement layout is identical regardless of lifetime parameter
 /// 5. Lifetimes are compile-time only, erased at runtime
 /// 6. All internal arena references in the clone are also transmuted consistently
@@ -226,7 +236,8 @@ fn clone_statement_to_arena<'old, 'arena>(
     // Transmute the statement from 'old to 'arena lifetime
     // SAFETY: The clone operation copied all data. The 'old lifetime
     // is just a type parameter - the actual data is freshly cloned.
-    let transmuted: Statement<'arena> = unsafe { std::mem::transmute(cloned) };
+    let transmuted: Statement<'arena> =
+        unsafe { std::mem::transmute::<Statement<'_>, Statement<'_>>(cloned) };
 
     // Allocate in new arena with correct lifetime
     arena.alloc(transmuted)
@@ -278,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_incremental_tree_source_matching() {
-        let arena = Arc::new(Bump::new());
+        let arena = Rc::new(Bump::new());
         let source = "local x = 1\nlocal y = 2";
 
         let statements = &[]; // Empty for this test
@@ -306,8 +317,8 @@ mod tests {
 
     #[test]
     fn test_arena_garbage_collection_logic() {
-        let arena0 = Arc::new(Bump::new());
-        let arena1 = Arc::new(Bump::new());
+        let arena0 = Rc::new(Bump::new());
+        let arena1 = Rc::new(Bump::new());
 
         // Create a minimal Statement::Break for testing
         let break_span = Span {
@@ -340,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_consolidation_trigger() {
-        let arena = Arc::new(Bump::new());
+        let arena = Rc::new(Bump::new());
         let break_span = Span::new(0, 5, 1, 1);
         let stmt: &Statement = arena.alloc(Statement::Break(break_span));
 
@@ -364,8 +375,8 @@ mod tests {
             ],
             source_hash: 0,
             arenas: vec![
-                Arc::new(Bump::new()),
-                Arc::new(Bump::new()),
+                Rc::new(Bump::new()),
+                Rc::new(Bump::new()),
             ],
         };
 

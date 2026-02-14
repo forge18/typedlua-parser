@@ -9,7 +9,7 @@ use crate::incremental::dirty::{DirtyRegionSet, TextEdit};
 use crate::lexer::Token;
 use crate::span::Span;
 use bumpalo::Bump;
-use std::sync::Arc;
+use std::rc::Rc;
 
 /// Tracks state during incremental parse
 ///
@@ -29,7 +29,7 @@ pub struct IncrementalParseState<'arena> {
     pub new_arena: &'arena Bump,
 
     /// Old arenas (kept alive for cached statements)
-    pub old_arenas: Vec<Arc<Bump>>,
+    pub old_arenas: Vec<Rc<Bump>>,
 
     /// Current statement index being processed
     pub current_stmt_idx: usize,
@@ -52,7 +52,7 @@ impl<'arena> IncrementalParseState<'arena> {
         edits: &[TextEdit],
         statement_ranges: &[(usize, Span)],
         new_arena: &'arena Bump,
-        old_arenas: Vec<Arc<Bump>>,
+        old_arenas: Vec<Rc<Bump>>,
     ) -> Self {
         let dirty_regions = DirtyRegionSet::calculate(edits, statement_ranges);
 
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn test_state_initialization() {
         let interner = StringInterner::new();
-        let old_arena = Arc::new(Bump::new());
+        let old_arena = Rc::new(Bump::new());
         let new_arena = Bump::new();
 
         // Create a simple cached statement
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_dirty_detection() {
-        let old_arena = Arc::new(Bump::new());
+        let old_arena = Rc::new(Bump::new());
         let new_arena = Bump::new();
 
         // Create statement ranges for 3 statements
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_get_resume_offset() {
-        let old_arena = Arc::new(Bump::new());
+        let old_arena = Rc::new(Bump::new());
         let new_arena = Bump::new();
         let interner = StringInterner::new();
 
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_get_dirty_region_range() {
-        let old_arena = Arc::new(Bump::new());
+        let old_arena = Rc::new(Bump::new());
         let new_arena = Bump::new();
         let interner = StringInterner::new();
 
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_empty_edits() {
-        let old_arena = Arc::new(Bump::new());
+        let old_arena = Rc::new(Bump::new());
         let new_arena = Bump::new();
 
         let statement_ranges = vec![(0, Span::new(0, 11, 1, 1))];

@@ -6,6 +6,7 @@ use luanext_parser::incremental::TextEdit;
 use luanext_parser::lexer::Lexer;
 use luanext_parser::parser::Parser;
 use luanext_parser::string_interner::StringInterner;
+use std::rc::Rc;
 use std::sync::Arc;
 
 #[test]
@@ -100,9 +101,6 @@ fn test_first_parse_path() {
 fn test_arena_consolidation_trigger() {
     // This test verifies that arena consolidation gets triggered at >3 arenas
     let source1 = "local x = 1";
-    let source2 = "local y = 2";
-    let source3 = "local z = 3";
-    let source4 = "local w = 4";
 
     let (interner, common) = StringInterner::new_with_common_identifiers();
     let handler = Arc::new(CollectingDiagnosticHandler::new());
@@ -118,13 +116,11 @@ fn test_arena_consolidation_trigger() {
 
     // Simulate incremental parses that accumulate arenas
     // We'll manually add arenas to test consolidation
-    use bumpalo::Bump;
-    use luanext_parser::incremental::CachedStatement;
 
     // Add arenas to trigger consolidation (max 3, then consolidate)
-    tree.arenas.push(Arc::new(Bump::new()));
-    tree.arenas.push(Arc::new(Bump::new()));
-    tree.arenas.push(Arc::new(Bump::new()));
+    tree.arenas.push(Rc::new(Bump::new()));
+    tree.arenas.push(Rc::new(Bump::new()));
+    tree.arenas.push(Rc::new(Bump::new()));
     assert_eq!(tree.arenas.len(), 4); // Now we have 4 arenas
 
     // Trigger GC - should consolidate because > 3
@@ -151,7 +147,7 @@ fn test_periodic_consolidation_every_10_parses() {
 
     // Simulate version 9 - should not consolidate
     tree.version = 9;
-    tree.arenas.push(Arc::new(Bump::new())); // Add a second arena
+    tree.arenas.push(Rc::new(Bump::new())); // Add a second arena
     assert_eq!(tree.arenas.len(), 2);
 
     tree.collect_garbage();

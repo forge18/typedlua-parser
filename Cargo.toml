@@ -22,8 +22,9 @@ bumpalo = "3.16"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [features]
-default = ["typed"]
+default = ["typed", "incremental-parsing"]
 typed = []  # Enable TypedLua extensions (classes, interfaces, etc.)
+incremental-parsing = []  # Enable incremental parsing for LSP performance
 
 [[bench]]
 name = "lexer"

@@ -8,14 +8,23 @@ use crate::incremental::cache::get_statement_span;
 use crate::incremental::dirty::TextEdit;
 use crate::span::Span;
 
-/// Check if a statement's span overlaps with any edit
+/// Check if a statement's span overlaps with any edit.
 ///
-/// Returns `true` if the statement is clean (can be reused).
-/// Returns `false` if the statement overlaps an edit (must re-parse).
+/// A statement is **clean** if its byte range `[start, end)` does not overlap
+/// any edit's byte range `[edit_start, edit_end)`. Clean statements can be
+/// reused from the previous parse tree without re-parsing.
+///
+/// Overlap is defined as: `stmt.start < edit.end && stmt.end > edit.start`.
+/// Edits that are exactly adjacent (edit ends where statement starts, or vice
+/// versa) are **not** considered overlapping — the statement is still clean.
+///
+/// # Returns
+/// - `true` — statement is clean, can be reused from cache
+/// - `false` — statement is dirty, must be re-parsed
 ///
 /// # Arguments
-/// * `stmt` - The statement to validate
-/// * `edits` - The text edits since last parse
+/// * `stmt` - The cached statement to validate
+/// * `edits` - The text edits applied since last parse
 pub fn is_statement_clean(stmt: &Statement, edits: &[TextEdit]) -> bool {
     let span = get_statement_span(stmt);
     !overlaps_any_edit(&span, edits)

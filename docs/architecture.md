@@ -152,6 +152,99 @@ Error reporting through the `DiagnosticHandler` trait:
 4. **Minimal cloning**: Use references where possible
 5. **Discriminant caching**: `std::mem::discriminant` comparisons
 
+## Incremental Parsing
+
+The parser supports incremental parsing behind the `incremental-parsing` feature flag (enabled by default). When a document is edited, only the affected statements are re-parsed — unmodified statements are reused from the previous parse tree.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  LSP textDocument/didChange                              │
+│  (edits: [{range, newText}, ...])                        │
+└────────────────┬─────────────────────────────────────────┘
+                 │
+                 v
+┌──────────────────────────────────────────────────────────┐
+│  ParseStrategyAnalyzer (heuristics.rs)                   │
+│  Decides: FullParse | Incremental | AppendOptimized      │
+└────────────────┬─────────────────────────────────────────┘
+                 │
+                 v
+┌──────────────────────────────────────────────────────────┐
+│  Parser::parse_incremental()                             │
+│                                                          │
+│  1. Classify statements: clean vs dirty                  │
+│     (is_statement_clean() — overlap check)               │
+│  2. Reuse clean statements from previous tree            │
+│  3. Re-lex + re-parse dirty regions only                 │
+│  4. Build new IncrementalParseTree                       │
+│  5. Run arena GC (collect_garbage)                       │
+└────────────────┬─────────────────────────────────────────┘
+                 │
+                 v
+┌──────────────────────────────────────────────────────────┐
+│  IncrementalParseTree                                    │
+│  ├── CachedStatement[] (refs into arenas)                │
+│  ├── arenas: Vec<Rc<Bump>> (max 3, then consolidate)     │
+│  ├── source_hash: u64 (FxHasher)                         │
+│  └── version: u64                                        │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Statement-Level Caching
+
+Statements are the unit of caching. Each `CachedStatement` stores:
+
+- A reference to the arena-allocated `Statement` AST node
+- The byte range and source hash for validation
+- The token stream for that statement (for re-lexing avoidance)
+- The arena generation index
+
+A statement is **clean** if its byte range does not overlap any edit. Overlap uses half-open interval semantics: `stmt.start < edit.end && stmt.end > edit.start`.
+
+### Arena Management
+
+Incremental parsing uses multiple `bumpalo::Bump` arenas:
+
+- Clean statements remain in their original arenas
+- Re-parsed statements go into a new arena
+- Arenas are consolidated (all cloned to one fresh arena) when:
+  - More than 3 arenas accumulate, OR
+  - Every 10 parse versions (periodic compaction)
+- Unreferenced arenas (no statements point to them) are dropped
+
+### Performance
+
+Benchmarked on a 100-statement file with single-line edits:
+
+| Scenario              | Speedup   | Notes                     |
+|-----------------------|-----------|---------------------------|
+| No edits (cache hit)  | ~10x      | Pointer copy only         |
+| Single statement edit | 2.7-3.3x  | Re-parse 1 of 100         |
+| All statements dirty  | ~1.0x     | Falls back to full parse  |
+
+### Debug Logging
+
+Set `LUANEXT_DEBUG_INCREMENTAL=1` to see parse decisions on stderr:
+```
+[incremental] No previous tree, doing full parse (1234 chars)
+[incremental] Incremental parse: 98 clean, 2 dirty out of 100 total
+[incremental] GC: 2 arenas after collection
+```
+
+### File Map
+
+```
+src/incremental/
+├── mod.rs        # Module exports, debug_incremental! macro
+├── cache.rs      # IncrementalParseTree, CachedStatement, arena GC
+├── dirty.rs      # TextEdit, DirtyRegionSet, dirty region calculation
+├── adjustment.rs # is_statement_clean() overlap check
+├── offset.rs     # adjust_span() for offset recalculation
+└── state.rs      # IncrementalState for LSP integration
+```
+
 ## Error Recovery
 
 The parser implements error recovery through synchronization:

@@ -48,6 +48,7 @@ pub mod ast;
 pub mod di;
 pub mod diagnostics;
 pub mod errors;
+#[cfg(feature = "incremental-parsing")]
 pub mod incremental;
 pub mod lexer;
 pub mod parser;

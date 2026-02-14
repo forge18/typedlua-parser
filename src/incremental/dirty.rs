@@ -3,12 +3,39 @@
 use crate::span::Span;
 use std::cmp::max;
 
-/// A text edit operation (from LSP or direct API)
+/// A text edit operation representing a change to source text.
+///
+/// Used by both the LSP (via `textDocument/didChange`) and the direct parser API.
+/// Edits are expressed in terms of byte offsets in the *original* source text
+/// (before any edits are applied).
+///
+/// - **Insertion**: `range.0 == range.1` (zero-length range, `new_text` is inserted)
+/// - **Deletion**: `new_text` is empty (the range is removed)
+/// - **Replacement**: non-zero range with non-empty `new_text`
+///
+/// # Examples
+///
+/// ```
+/// use luanext_parser::incremental::TextEdit;
+///
+/// // Insert "hello " at byte offset 0
+/// let insert = TextEdit { range: (0, 0), new_text: "hello ".to_string() };
+/// assert_eq!(insert.byte_delta(), 6);
+///
+/// // Delete bytes 5..10
+/// let delete = TextEdit { range: (5, 10), new_text: String::new() };
+/// assert_eq!(delete.byte_delta(), -5);
+///
+/// // Replace bytes 0..5 with "world"
+/// let replace = TextEdit { range: (0, 5), new_text: "world".to_string() };
+/// assert_eq!(replace.byte_delta(), 0);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
-    /// Byte range being replaced (start, end)
+    /// Byte range being replaced in original source coordinates: `(start, end)`.
+    /// For insertions, `start == end`.
     pub range: (u32, u32),
-    /// New text to insert
+    /// Replacement text. Empty string for deletions.
     pub new_text: String,
 }
 
@@ -45,19 +72,49 @@ pub struct DirtyRegionSet {
 }
 
 impl DirtyRegionSet {
-    /// Calculate dirty regions from text edits and statement boundaries
+    /// Calculate dirty regions from text edits and statement boundaries.
     ///
-    /// Algorithm:
-    /// 1. Merge overlapping edits into contiguous regions
-    /// 2. Binary search statement_ranges to find affected statements
-    /// 3. Compute byte deltas for offset adjustment
+    /// # Algorithm
+    ///
+    /// 1. **Merge**: Sort edits by start position, then merge overlapping or
+    ///    adjacent edits into contiguous regions (reduces N edits to M merged).
+    /// 2. **Binary search**: For each merged edit, binary search `statement_ranges`
+    ///    to find the first and last statement whose span overlaps the edit range.
+    /// 3. **Collect**: Record affected statement indices and cumulative byte deltas.
+    ///
+    /// # Complexity
+    ///
+    /// `O(E log E + M log S)` where `E` = number of edits, `M` = merged edit count,
+    /// and `S` = number of statements. In the typical LSP case (`E` = 1-3, `S` = 10-500),
+    /// this is effectively `O(log S)`.
     ///
     /// # Arguments
-    /// * `edits` - Text edits (assumed sorted by start position)
-    /// * `statement_ranges` - Statement boundaries [(index, span)]
+    /// * `edits` - Text edits in original source coordinates (need not be sorted)
+    /// * `statement_ranges` - Statement boundaries as `[(index, span)]`, sorted by position
     ///
     /// # Returns
-    /// DirtyRegionSet with affected statements and byte deltas
+    /// A `DirtyRegionSet` containing per-region affected statements and byte deltas.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use luanext_parser::incremental::dirty::{TextEdit, DirtyRegionSet};
+    /// use luanext_parser::span::Span;
+    ///
+    /// // Two statements: stmt 0 spans bytes 0..12, stmt 1 spans bytes 12..24
+    /// let ranges = vec![
+    ///     (0, Span::new(0, 12, 1, 1)),
+    ///     (1, Span::new(12, 24, 2, 1)),
+    /// ];
+    ///
+    /// // Edit inside statement 1 only
+    /// let edits = vec![TextEdit { range: (15, 18), new_text: "xyz".to_string() }];
+    /// let dirty = DirtyRegionSet::calculate(&edits, &ranges);
+    ///
+    /// assert_eq!(dirty.regions.len(), 1);
+    /// assert_eq!(dirty.regions[0].affected_statements, vec![1]);
+    /// assert_eq!(dirty.total_delta, 0); // same-length replacement
+    /// ```
     pub fn calculate(edits: &[TextEdit], statement_ranges: &[(usize, Span)]) -> Self {
         if edits.is_empty() {
             return DirtyRegionSet {

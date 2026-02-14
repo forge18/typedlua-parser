@@ -9,6 +9,8 @@ use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
 use crate::string_interner::{CommonIdentifiers, StringInterner};
 use bumpalo::Bump;
+#[cfg(feature = "incremental-parsing")]
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub use expression::ExpressionParser;
@@ -142,15 +144,40 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         ))
     }
 
-    /// Incremental parse using cached statements from previous parse
+    /// Incrementally parse source code, reusing clean statements from a previous parse tree.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **First parse** (`prev_tree` is `None`): Full parse. Builds initial
+    ///    `IncrementalParseTree` with cached statements and token slices.
+    /// 2. **No edits** (edits empty, source hash matches): Clones statement references
+    ///    from previous tree — O(n) copy of pointers, no parsing.
+    /// 3. **Partial edits**: Classifies each cached statement as clean or dirty via
+    ///    `is_statement_clean()` (overlap check against edit ranges). Clean statements
+    ///    are reused directly; dirty regions are re-lexed and re-parsed individually.
+    /// 4. **All dirty fallback**: If every statement overlaps an edit, falls back to
+    ///    full parse (avoids overhead of incremental bookkeeping).
+    /// 5. **Arena GC**: After building the new tree, `collect_garbage()` drops
+    ///    unreferenced arenas or consolidates all statements into a fresh arena
+    ///    (triggers at >3 arenas or every 10 versions).
     ///
     /// # Safety
-    /// Uses `unsafe transmute` to cast lifetimes (pattern from module_phase.rs:47-51)
+    ///
+    /// Uses `unsafe transmute` to cast arena lifetimes (`'static` ↔ `'arena`).
+    /// This is safe because arenas are kept alive via `Rc<Bump>` in the
+    /// `IncrementalParseTree`, and lifetimes are erased at runtime (same pattern
+    /// as `module_phase.rs` for `ModuleRegistry`).
+    ///
+    /// # Performance
+    ///
+    /// For typical single-line edits in a 100-statement file, this re-parses only
+    /// 1-2 statements (~2.7-3.3x faster than full reparse in benchmarks).
     ///
     /// # Arguments
-    /// * `prev_tree` - Previous parse tree (None for first parse)
-    /// * `edits` - Text edits since last parse
-    /// * `source` - Current source text
+    /// * `prev_tree` - Previous parse tree (`None` for first parse)
+    /// * `edits` - Text edits since last parse (original source coordinates)
+    /// * `source` - Current source text (after edits applied)
+    #[cfg(feature = "incremental-parsing")]
     pub fn parse_incremental(
         &mut self,
         prev_tree: Option<&crate::incremental::IncrementalParseTree<'static>>,
@@ -161,22 +188,23 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         // Fast path: No previous tree, do full parse
         let Some(prev_tree) = prev_tree else {
+            crate::incremental::debug_incremental!("No previous tree, doing full parse ({} chars)", source.len());
             let prog = self.parse()?;
-            let arena_arc = Arc::new(Bump::new());
+            let arena_arc = Rc::new(Bump::new());
 
             // Cache tokens for each statement using binary search
             let cached_statements: Vec<_> = prog.statements.iter().map(|stmt| {
                 let span = crate::incremental::get_statement_span(stmt);
                 let start_idx = self.tokens.partition_point(|t| t.span.start < span.start);
                 let end_idx = self.tokens.partition_point(|t| t.span.start < span.end);
-                let stmt_tokens: Vec<_> = self.tokens[start_idx..end_idx].iter().cloned().collect();
+                let stmt_tokens = self.tokens[start_idx..end_idx].to_vec();
                 crate::incremental::CachedStatement::new(stmt, source, 0, stmt_tokens)
             }).collect();
 
             let source_hash = {
-                use std::collections::hash_map::DefaultHasher;
+                use rustc_hash::FxHasher;
                 use std::hash::{Hash, Hasher};
-                let mut hasher = DefaultHasher::new();
+                let mut hasher = FxHasher::default();
                 source.hash(&mut hasher);
                 hasher.finish()
             };
@@ -192,6 +220,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         // Fast path: No edits, reuse entire tree
         if edits.is_empty() && prev_tree.source_matches(source) {
+            crate::incremental::debug_incremental!(
+                "No edits, source matches - reusing entire tree ({} statements)",
+                prev_tree.statements.len()
+            );
             // Clone statement values (cheap, they're just references to arena data)
             let statement_values: Vec<_> = prev_tree.statements
                 .iter()
@@ -229,10 +261,21 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         }
 
+        crate::incremental::debug_incremental!(
+            "Incremental parse: {} clean, {} dirty out of {} total",
+            clean_set.len(),
+            dirty_ranges.len(),
+            prev_tree.statements.len()
+        );
+
         // If all statements are dirty, fall back to full parse
         if clean_set.is_empty() {
+            crate::incremental::debug_incremental!(
+                "All {} statements dirty, falling back to full parse",
+                prev_tree.statements.len()
+            );
             let prog = self.parse()?;
-            let arena_arc = Arc::new(Bump::new());
+            let arena_arc = Rc::new(Bump::new());
             let tree = crate::incremental::IncrementalParseTree::new(
                 prev_tree.version + 1,
                 prog.statements,
@@ -244,7 +287,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         // Build new statement list: mix of cached + newly parsed
         let mut all_statements: Vec<crate::ast::statement::Statement<'arena>> = Vec::new();
-        let new_arena = Arc::new(Bump::new());
+        let new_arena = Rc::new(Bump::new());
         let next_generation = prev_tree.arenas.len();
 
         // Lex only dirty regions instead of using the full token stream
@@ -304,8 +347,8 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 if clean_set.contains(&idx) {
                     // Reuse the original cached statement directly
                     // SAFETY: 'static → 'arena transmute is safe because the arena is kept
-                    // alive via Arc<Bump> in the IncrementalParseTree
-                    unsafe { std::mem::transmute(prev_tree.statements[idx].clone()) }
+                    // alive via Rc<Bump> in the IncrementalParseTree
+                    unsafe { std::mem::transmute::<crate::incremental::CachedStatement<'_>, crate::incremental::CachedStatement<'_>>(prev_tree.statements[idx].clone()) }
                 } else {
                     // Newly parsed statement: use tokens from the dirty region lex
                     let stmt_tokens = dirty_tokens_map.iter()
@@ -336,6 +379,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
 
         // Run GC to prevent arena accumulation
         tree.collect_garbage();
+        crate::incremental::debug_incremental!("GC: {} arenas after collection", tree.arenas.len());
 
         Ok((prog, tree))
     }
@@ -343,6 +387,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     /// Parse a single statement at a specific byte offset
     ///
     /// Seeks the parser position to the correct token and parses a statement
+    #[cfg(feature = "incremental-parsing")]
     #[allow(dead_code)]
     fn parse_statement_at_offset(
         &mut self,
