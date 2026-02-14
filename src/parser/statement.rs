@@ -661,11 +661,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                             IndexKeyType::Number
                         }
                         _ => {
-                            return Err(ParserError {
-                                message: "Index signature key must be 'string' or 'number'"
-                                    .to_string(),
-                                span: self.current_span(),
-                            })
+                            return Err(ParserError::new(
+                                "Index signature key must be 'string' or 'number'",
+                                self.current_span(),
+                            ))
                         }
                     };
                     (key_name, key_type)
@@ -676,10 +675,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 }
             }
         } else {
-            return Err(ParserError {
-                message: "Expected identifier in index signature".to_string(),
-                span: self.current_span(),
-            });
+            return Err(ParserError::new(
+                "Expected identifier in index signature",
+                self.current_span(),
+            ));
         };
 
         self.consume(TokenKind::RightBracket, "Expected ']'")?;
@@ -847,10 +846,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     let value = if self.match_token(&[TokenKind::Equal]) {
                         match &self.current().kind {
                             TokenKind::Number(s) => {
-                                let val = s.parse::<f64>().map_err(|_| ParserError {
-                                    message: "Invalid number in enum value".to_string(),
-                                    span: self.current_span(),
-                                })?;
+                                let val = s.parse::<f64>().map_err(|_| ParserError::new(
+                                    "Invalid number in enum value",
+                                    self.current_span(),
+                                ))?;
                                 self.advance();
                                 Some(EnumValue::Number(val))
                             }
@@ -860,10 +859,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                                 Some(EnumValue::String(val))
                             }
                             _ => {
-                                return Err(ParserError {
-                                    message: "Enum value must be a number or string".to_string(),
-                                    span: self.current_span(),
-                                })
+                                return Err(ParserError::new(
+                                    "Enum value must be a number or string",
+                                    self.current_span(),
+                                ))
                             }
                         }
                     } else {
@@ -929,10 +928,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 });
                 is_rich_enum = true;
             } else {
-                return Err(ParserError {
-                    message: format!("Unexpected token in enum body: {:?}", token),
-                    span: self.current_span(),
-                });
+                return Err(ParserError::new(
+                    format!("Unexpected token in enum body: {:?}", token),
+                    self.current_span(),
+                ));
             }
 
             // Commas are optional separators in rich enums (like class member syntax).
@@ -995,10 +994,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             }
         } else {
             if is_type_only {
-                return Err(ParserError {
-                    message: "Type-only imports must use named import syntax: import type { Name } from '...'".to_string(),
-                    span: self.current_span(),
-                });
+                return Err(ParserError::new(
+                    "Type-only imports must use named import syntax: import type { Name } from '...'",
+                    self.current_span(),
+                ));
             }
             let name = self.parse_identifier()?;
 
@@ -1035,10 +1034,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 src
             }
             _ => {
-                return Err(ParserError {
-                    message: "Expected string literal for import source".to_string(),
-                    span: self.current_span(),
-                })
+                return Err(ParserError::new(
+                    "Expected string literal for import source",
+                    self.current_span(),
+                ))
             }
         };
 
@@ -1128,10 +1127,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     source_string
                 }
                 _ => {
-                    return Err(ParserError {
-                        message: "Expected string literal after 'from'".to_string(),
-                        span: self.current_span(),
-                    });
+                    return Err(ParserError::new(
+                        "Expected string literal after 'from'",
+                        self.current_span(),
+                    ));
                 }
             };
 
@@ -1222,10 +1221,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             TokenKind::Namespace => self.parse_declare_namespace(),
             TokenKind::Type => self.parse_declare_type(),
             TokenKind::Interface => self.parse_declare_interface(),
-            _ => Err(ParserError {
-                message: "Expected 'function', 'const', 'namespace', 'type', or 'interface' after 'declare'".to_string(),
-                span: self.current_span(),
-            }),
+            _ => Err(ParserError::new(
+                "Expected 'function', 'const', 'namespace', 'type', or 'interface' after 'declare'",
+                self.current_span(),
+            )),
         }
     }
 
@@ -1337,13 +1336,13 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     const_stmt
                 }
                 _ => {
-                    return Err(ParserError {
-                        message: format!(
+                    return Err(ParserError::new(
+                        format!(
                             "Expected 'function' or 'const' in namespace, found {:?}",
                             self.current().kind
                         ),
-                        span: self.current_span(),
-                    });
+                        self.current_span(),
+                    ));
                 }
             };
 
@@ -1475,10 +1474,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 .any(|m| matches!(m, ClassMember::Constructor(c) if !c.parameters.is_empty()));
 
             if has_parameterized_constructor {
-                return Err(ParserError {
-                    message: "Cannot have both a primary constructor and a parameterized constructor in the same class".to_string(),
-                    span: start_span,
-                });
+                return Err(ParserError::new(
+                    "Cannot have both a primary constructor and a parameterized constructor in the same class",
+                    start_span,
+                ));
             }
         }
 
@@ -1660,10 +1659,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 span: start_span.combine(&end_span),
             }))
         } else {
-            Err(ParserError {
-                message: "Expected ':' for property or '(' for method".into(),
-                span: self.current_span(),
-            })
+            Err(ParserError::new(
+                "Expected ':' for property or '(' for method",
+                self.current_span(),
+            ))
         }
     }
 
@@ -1811,10 +1810,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             let params = self.parse_parameter_list()?;
             self.consume(TokenKind::RightParen, "Expected ')'")?;
             if params.len() != 2 {
-                return Err(ParserError {
-                    message: "operator []= requires exactly 2 parameters (index and value)".into(),
-                    span: self.current_span(),
-                });
+                return Err(ParserError::new(
+                    "operator []= requires exactly 2 parameters (index and value)",
+                    self.current_span(),
+                ));
             }
             params
         } else if self.check(&TokenKind::LeftParen) {
@@ -1950,10 +1949,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 } else if self.match_token(&[TokenKind::RightBracket]) {
                     OperatorKind::Index
                 } else {
-                    return Err(ParserError {
-                        message: "Expected ']' or '=' after '[' in operator definition".into(),
-                        span: self.current_span(),
-                    });
+                    return Err(ParserError::new(
+                        "Expected ']' or '=' after '[' in operator definition",
+                        self.current_span(),
+                    ));
                 }
             }
             TokenKind::LeftParen => {
@@ -1969,10 +1968,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 OperatorKind::Length
             }
             _ => {
-                return Err(ParserError {
-                    message: "Invalid operator symbol".to_string(),
-                    span: self.current_span(),
-                });
+                return Err(ParserError::new(
+                    "Invalid operator symbol",
+                    self.current_span(),
+                ));
             }
         };
         Ok(op)
@@ -2002,17 +2001,17 @@ impl<'a, 'arena> Parser<'a, 'arena> {
         let start_span = self.current_span();
 
         if self.has_namespace {
-            return Err(ParserError {
-                message: "Only one namespace declaration allowed per file".to_string(),
-                span: start_span,
-            });
+            return Err(ParserError::new(
+                "Only one namespace declaration allowed per file",
+                start_span,
+            ));
         }
 
         if !self.is_first_statement {
-            return Err(ParserError {
-                message: "Namespace declaration must be the first statement".to_string(),
-                span: start_span,
-            });
+            return Err(ParserError::new(
+                "Namespace declaration must be the first statement",
+                start_span,
+            ));
         }
 
         self.consume(TokenKind::Namespace, "Expected 'namespace'")?;
@@ -2246,10 +2245,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                 self.advance();
                 Ok(ident)
             }
-            _ => Err(ParserError {
-                message: format!("Expected identifier, got {:?}", self.current().kind),
-                span: self.current_span(),
-            }),
+            _ => Err(ParserError::new(
+                format!("Expected identifier, got {:?}", self.current().kind),
+                self.current_span(),
+            )),
         }
     }
 
@@ -2260,23 +2259,23 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             kind if kind.is_keyword() => match kind.to_keyword_str() {
                 Some(s) => self.interner.intern(s),
                 None => {
-                    return Err(ParserError {
-                        message: format!(
+                    return Err(ParserError::new(
+                        format!(
                             "Internal error: keyword {:?} missing string representation",
                             kind
                         ),
                         span,
-                    });
+                    ));
                 }
             },
             _ => {
-                return Err(ParserError {
-                    message: format!(
+                return Err(ParserError::new(
+                    format!(
                         "Expected identifier or keyword, got {:?}",
                         self.current().kind
                     ),
                     span,
-                });
+                ));
             }
         };
 
@@ -2302,22 +2301,22 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     self.advance();
                     Ok(Spanned::new(id, span))
                 } else {
-                    Err(ParserError {
-                        message: format!(
+                    Err(ParserError::new(
+                        format!(
                             "Internal error: keyword {:?} missing string representation",
                             kind
                         ),
                         span,
-                    })
+                    ))
                 }
             }
-            _ => Err(ParserError {
-                message: format!(
+            _ => Err(ParserError::new(
+                format!(
                     "Expected identifier or keyword, got {:?}",
                     self.current().kind
                 ),
                 span,
-            }),
+            )),
         }
     }
 
@@ -2549,10 +2548,10 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
-        let tokens = lexer.tokenize().map_err(|e| ParserError {
-            message: format!("Lexer error: {:?}", e),
-            span: Span::default(),
-        })?;
+        let tokens = lexer.tokenize().map_err(|e| ParserError::new(
+            format!("Lexer error: {:?}", e),
+            Span::default(),
+        ))?;
         let arena = Box::leak(Box::new(Bump::new()));
         let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse_statement()
@@ -2563,10 +2562,10 @@ mod tests {
         let handler = Arc::new(CollectingDiagnosticHandler::new());
         let (interner, common) = StringInterner::new_with_common_identifiers();
         let mut lexer = Lexer::new(source, handler.clone(), &interner);
-        let tokens = lexer.tokenize().map_err(|e| ParserError {
-            message: format!("Lexer error: {:?}", e),
-            span: Span::default(),
-        })?;
+        let tokens = lexer.tokenize().map_err(|e| ParserError::new(
+            format!("Lexer error: {:?}", e),
+            Span::default(),
+        ))?;
         let arena = Box::leak(Box::new(Bump::new()));
         let mut parser = Parser::new(tokens, handler, &interner, &common, arena);
         parser.parse()
