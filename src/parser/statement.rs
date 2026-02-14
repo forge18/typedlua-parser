@@ -1151,10 +1151,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                         Some(source_string)
                     }
                     _ => {
-                        return Err(ParserError {
-                            message: "Expected string literal after 'from'".to_string(),
-                            span: self.current_span(),
-                        });
+                        return Err(ParserError::new(
+                            "Expected string literal after 'from'",
+                            self.current_span(),
+                        ));
                     }
                 }
             } else {

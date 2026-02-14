@@ -4,7 +4,7 @@ mod statement;
 mod types;
 
 use crate::ast::Program;
-use crate::diagnostics::{error_codes, DiagnosticHandler};
+use crate::diagnostics::{error_codes, Diagnostic, DiagnosticCode, DiagnosticHandler};
 use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
 use crate::string_interner::{CommonIdentifiers, StringInterner};
@@ -138,7 +138,7 @@ impl<'a, 'arena> Parser<'a, 'arena> {
                     self.is_first_statement = false;
                 }
                 Err(e) => {
-                    self.report_error(&e.message, e.span);
+                    self.report_parser_error(&e);
                     // Error recovery: skip to next statement
                     self.synchronize();
                 }
@@ -564,7 +564,39 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             return Ok(self.advance());
         }
 
-        Err(ParserError::new(message, self.current_span()))
+        let mut err = ParserError::new(message, self.current_span());
+
+        // Attach contextual suggestion based on expected token
+        if let Some(suggestion) = self.suggest_for_expected(&kind) {
+            err = err.with_suggestion(suggestion);
+        }
+
+        // Check for common typos: = vs ==
+        if kind == TokenKind::Equal && self.check(&TokenKind::EqualEqual) {
+            err = err.with_suggestion("Use '=' for assignment, not '=='");
+        } else if kind == TokenKind::EqualEqual && self.check(&TokenKind::Equal) {
+            err = err.with_suggestion("Use '==' for comparison, not '='");
+        }
+
+        Err(err)
+    }
+
+    /// Returns a contextual suggestion for a missing expected token.
+    fn suggest_for_expected(&self, expected: &TokenKind) -> Option<&'static str> {
+        match expected {
+            // Block terminators
+            TokenKind::End => Some("Add 'end' to close this block"),
+            TokenKind::Then => Some("Add 'then' after the condition"),
+            TokenKind::Do => Some("Add 'do' after the condition"),
+            TokenKind::Until => Some("Add 'until' followed by a condition"),
+
+            // Delimiters
+            TokenKind::RightParen => Some("Add ')' to close the opening '('"),
+            TokenKind::RightBracket => Some("Add ']' to close the opening '['"),
+            TokenKind::RightBrace => Some("Add '}' to close the opening '{'"),
+
+            _ => None,
+        }
     }
 
     /// Consume a closing `>` for type arguments.
@@ -594,9 +626,10 @@ impl<'a, 'arena> Parser<'a, 'arena> {
     }
 
     // Error reporting
-    fn report_error(&self, message: &str, span: Span) {
-        // Assign error codes based on message patterns
-        let error_code = if message.contains("break") && message.contains("outside") {
+
+    /// Classify error code from message content.
+    fn classify_error_code(message: &str) -> DiagnosticCode {
+        if message.contains("break") && message.contains("outside") {
             error_codes::BREAK_OUTSIDE_LOOP
         } else if message.contains("continue") && message.contains("outside") {
             error_codes::CONTINUE_OUTSIDE_LOOP
@@ -616,10 +649,28 @@ impl<'a, 'arena> Parser<'a, 'arena> {
             error_codes::EXPECTED_TOKEN
         } else {
             error_codes::UNEXPECTED_TOKEN
-        };
+        }
+    }
 
-        self.diagnostic_handler
-            .report_error(span, error_code, message);
+    fn report_error(&self, message: &str, span: Span) {
+        self.report_parser_error(&ParserError::new(message, span));
+    }
+
+    /// Report a ParserError as a diagnostic, including any suggestion.
+    fn report_parser_error(&self, error: &ParserError) {
+        let error_code = Self::classify_error_code(&error.message);
+        let mut diagnostic =
+            Diagnostic::error_with_code(error.span, error_code, error.message.clone());
+
+        if let Some(suggestion) = &error.suggestion {
+            diagnostic = diagnostic.with_suggestion(
+                error.span,
+                String::new(),
+                suggestion.clone(),
+            );
+        }
+
+        self.diagnostic_handler.report(diagnostic);
     }
 
     // Error recovery: skip to next statement boundary

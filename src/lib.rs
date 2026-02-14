@@ -119,20 +119,20 @@ pub fn parse_with_container<'arena>(
     let diagnostic_handler = match container.resolve::<Arc<dyn DiagnosticHandler>>() {
         Some(handler) => handler,
         None => {
-            return Err(ParserError {
-                message: "No DiagnosticHandler registered in container".to_string(),
-                span: Span::default(),
-            });
+            return Err(ParserError::new(
+                "No DiagnosticHandler registered in container",
+                Span::default(),
+            ));
         }
     };
 
     let (interner, common) = StringInterner::new_with_common_identifiers();
     let mut lexer = Lexer::new(source, diagnostic_handler.clone(), &interner);
 
-    let tokens = lexer.tokenize().map_err(|e| ParserError {
-        message: format!("Lexer error: {:?}", e),
-        span: Span::default(),
-    })?;
+    let tokens = lexer.tokenize().map_err(|e| ParserError::new(
+        format!("Lexer error: {:?}", e),
+        Span::default(),
+    ))?;
 
     let mut parser = Parser::new(tokens, diagnostic_handler, &interner, &common, arena);
     parser.parse()
