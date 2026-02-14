@@ -3,34 +3,53 @@
 //! These tests simulate real-world editing patterns to verify incremental
 //! parsing produces the same results as full parsing.
 
+use bumpalo::Bump;
 use luanext_parser::diagnostics::CollectingDiagnosticHandler;
 use luanext_parser::incremental::TextEdit;
+use luanext_parser::lexer::Lexer;
 use luanext_parser::parser::Parser;
+use luanext_parser::string_interner::StringInterner;
+use std::sync::Arc;
 
 fn parse_and_compare(initial_source: &str, edits: &[TextEdit], final_source: &str) {
-    // Parse with incremental
-    let incremental_arena = bumpalo::Bump::new();
-    let incremental_handler = CollectingDiagnosticHandler::new();
-    let incremental_parser = Parser::new(initial_source, &incremental_handler, &incremental_arena);
-    let incremental_result = incremental_parser.parse_incremental(edits);
+    let (interner, common) = StringInterner::new_with_common_identifiers();
+    let handler = Arc::new(CollectingDiagnosticHandler::new());
 
-    // Parse final source fresh (full parse)
-    let full_arena = bumpalo::Bump::new();
-    let full_handler = CollectingDiagnosticHandler::new();
-    let full_parser = Parser::new(final_source, &full_handler, &full_arena);
-    let full_result = full_parser.parse();
+    // First parse (initial source)
+    let mut lexer1 = Lexer::new(initial_source, handler.clone(), &interner);
+    let tokens1 = lexer1.tokenize().expect("Initial tokenize failed");
+    let arena1 = Bump::new();
+    let mut parser1 = Parser::new(tokens1, handler.clone(), &interner, &common, &arena1);
+    let (_, tree1) = parser1
+        .parse_incremental(None, &[], initial_source)
+        .expect("Initial parse should succeed");
 
-    // Both should succeed
-    assert!(incremental_result.is_some(), "Incremental parse failed");
-    assert!(full_result.is_some(), "Full parse failed");
+    // Incremental parse (with edits)
+    let mut lexer2 = Lexer::new(final_source, handler.clone(), &interner);
+    let tokens2 = lexer2.tokenize().expect("Final tokenize failed");
+    let arena2 = Bump::new();
+    let mut parser2 = Parser::new(tokens2.clone(), handler.clone(), &interner, &common, &arena2);
+
+    let static_tree: &luanext_parser::incremental::IncrementalParseTree<'static> = unsafe {
+        std::mem::transmute(&tree1)
+    };
+
+    let (inc_prog, _) = parser2
+        .parse_incremental(Some(static_tree), edits, final_source)
+        .expect("Incremental parse should succeed");
+
+    // Full parse of final source (for comparison)
+    let arena3 = Bump::new();
+    let mut parser3 = Parser::new(tokens2, handler.clone(), &interner, &common, &arena3);
+    let full_prog = parser3.parse().expect("Full parse should succeed");
 
     // Both should have same number of statements
-    let inc_stmts = incremental_result.unwrap().statements.len();
-    let full_stmts = full_result.unwrap().statements.len();
     assert_eq!(
-        inc_stmts, full_stmts,
+        inc_prog.statements.len(),
+        full_prog.statements.len(),
         "Statement count mismatch: incremental={}, full={}",
-        inc_stmts, full_stmts
+        inc_prog.statements.len(),
+        full_prog.statements.len()
     );
 }
 
@@ -40,7 +59,7 @@ fn test_type_single_character() {
     let final_text = "local x = 12";
 
     let edits = vec![TextEdit {
-        range: (11, 11), // Insert after "1"
+        range: (11, 11),
         new_text: "2".to_string(),
     }];
 
@@ -53,7 +72,7 @@ fn test_delete_single_line() {
     let final_text = "local x = 1\nlocal z = 3";
 
     let edits = vec![TextEdit {
-        range: (12, 24), // Delete "local y = 2\n"
+        range: (12, 24),
         new_text: String::new(),
     }];
 
@@ -66,7 +85,7 @@ fn test_paste_multiline_code() {
     let final_text = "local x = 1\nlocal y = 2\nlocal z = 3";
 
     let edits = vec![TextEdit {
-        range: (11, 11), // Append after first line
+        range: (11, 11),
         new_text: "\nlocal y = 2\nlocal z = 3".to_string(),
     }];
 
@@ -75,28 +94,19 @@ fn test_paste_multiline_code() {
 
 #[test]
 fn test_undo_redo_sequence() {
-    // Initial: "local x = 1"
-    // Edit 1: Change to "local x = 2"
-    // Edit 2: Change back to "local x = 1" (undo)
-
     let initial = "local x = 1";
 
-    // First edit: change 1 to 2
     let edit1 = vec![TextEdit {
         range: (10, 11),
         new_text: "2".to_string(),
     }];
 
-    // Second edit: change 2 back to 1
     let edit2 = vec![TextEdit {
         range: (10, 11),
         new_text: "1".to_string(),
     }];
 
-    // After edit1
     parse_and_compare(initial, &edit1, "local x = 2");
-
-    // After edit2 (undo)
     parse_and_compare("local x = 2", &edit2, "local x = 1");
 }
 
@@ -105,7 +115,6 @@ fn test_format_document() {
     let initial = "local x=1\nlocal y=2";
     let final_text = "local x = 1\nlocal y = 2";
 
-    // Add spaces around equals signs
     let edits = vec![
         TextEdit {
             range: (7, 7),
@@ -130,31 +139,26 @@ fn test_format_document() {
 
 #[test]
 fn test_incremental_typing_sequence() {
-    // Simulate typing "local x = 1" character by character
     let initial = "";
 
-    // Type "local "
     let step1 = vec![TextEdit {
         range: (0, 0),
         new_text: "local ".to_string(),
     }];
     parse_and_compare(initial, &step1, "local ");
 
-    // Type "x"
     let step2 = vec![TextEdit {
         range: (6, 6),
         new_text: "x".to_string(),
     }];
     parse_and_compare("local ", &step2, "local x");
 
-    // Type " = "
     let step3 = vec![TextEdit {
         range: (7, 7),
         new_text: " = ".to_string(),
     }];
     parse_and_compare("local x", &step3, "local x = ");
 
-    // Type "1"
     let step4 = vec![TextEdit {
         range: (10, 10),
         new_text: "1".to_string(),
@@ -164,25 +168,11 @@ fn test_incremental_typing_sequence() {
 
 #[test]
 fn test_delete_entire_function() {
-    let initial = r#"
-function foo(): void
-    return
-end
+    let initial = "function foo(): void\n    return\nend\n\nfunction bar(): void\n    return\nend";
+    let final_text = "function bar(): void\n    return\nend";
 
-function bar(): void
-    return
-end
-"#;
-
-    let final_text = r#"
-function bar(): void
-    return
-end
-"#;
-
-    // Delete first function (approximate byte positions)
     let edits = vec![TextEdit {
-        range: (1, 42), // Delete "function foo()...\nend\n"
+        range: (0, 36),
         new_text: String::new(),
     }];
 
@@ -191,20 +181,11 @@ end
 
 #[test]
 fn test_insert_new_function() {
-    let initial = r#"function foo(): void
-    return
-end"#;
-
-    let final_text = r#"function foo(): void
-    return
-end
-
-function bar(): void
-    return
-end"#;
+    let initial = "function foo(): void\n    return\nend";
+    let final_text = "function foo(): void\n    return\nend\n\nfunction bar(): void\n    return\nend";
 
     let edits = vec![TextEdit {
-        range: (35, 35), // Append after first function
+        range: (34, 34),
         new_text: "\n\nfunction bar(): void\n    return\nend".to_string(),
     }];
 
@@ -237,11 +218,11 @@ fn test_uncomment_code() {
 
     let edits = vec![
         TextEdit {
-            range: (0, 3), // Delete "-- "
+            range: (0, 3),
             new_text: String::new(),
         },
         TextEdit {
-            range: (12, 15), // Delete "-- " (adjusted for first deletion)
+            range: (12, 15),
             new_text: String::new(),
         },
     ];

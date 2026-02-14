@@ -132,9 +132,36 @@ mod tests {
     use super::*;
     use crate::ast::expression::{Expression, ExpressionKind, Literal};
     use crate::ast::statement::{VariableDeclaration, VariableKind};
-    use crate::ast::Ident;
-    use crate::ast::Pattern;
+    use crate::ast::Spanned;
+    use crate::ast::pattern::Pattern;
     use crate::string_interner::StringInterner;
+
+    /// Helper to create a simple variable statement in an arena and return a static reference
+    fn make_cached_var<'a>(
+        arena: &'a Bump,
+        interner: &StringInterner,
+        name: &str,
+        value: f64,
+        span: Span,
+        init_span: Span,
+        source: &str,
+    ) -> CachedStatement<'static> {
+        let id = interner.intern(name);
+        let decl = VariableDeclaration {
+            kind: VariableKind::Local,
+            pattern: Pattern::Identifier(Spanned::new(id, span)),
+            type_annotation: None,
+            initializer: Expression::new(
+                ExpressionKind::Literal(Literal::Number(value)),
+                init_span,
+            ),
+            span,
+        };
+        let stmt_ref = arena.alloc(Statement::Variable(decl));
+        // SAFETY: Safe because the arena is kept alive via Rc for the lifetime of the test
+        let static_ref: &'static Statement<'static> = unsafe { std::mem::transmute(&*stmt_ref) };
+        CachedStatement::new(static_ref, source, 0, vec![])
+    }
 
     #[test]
     fn test_state_initialization() {
@@ -142,30 +169,14 @@ mod tests {
         let old_arena = Rc::new(Bump::new());
         let new_arena = Bump::new();
 
-        // Create a simple cached statement
-        let x_id = interner.intern("x");
-        let stmt = Statement::Variable(old_arena.alloc(VariableDeclaration {
-            kind: VariableKind::Local,
-            pattern: Pattern::Identifier(Ident {
-                name: x_id,
-                span: Span::new(0, 11, 1, 1),
-            }),
-            type_annotation: None,
-            initializer: Expression::new(
-                ExpressionKind::Literal(Literal::Number(1.0)),
-                Span::new(10, 11, 1, 11),
-            ),
-            span: Span::new(0, 11, 1, 1),
-        }));
-
-        // SAFETY: Safe because old_arena is kept alive by Arc
-        let static_stmt: &Statement<'static> = unsafe { std::mem::transmute(stmt) };
-
-        let cached = CachedStatement::new(
-            static_stmt,
+        let cached = make_cached_var(
+            &old_arena,
+            &interner,
+            "x",
+            1.0,
+            Span::new(0, 11, 1, 1),
+            Span::new(10, 11, 1, 11),
             "local x = 1",
-            0,
-            vec![],
         );
 
         let statement_ranges = vec![(0, Span::new(0, 11, 1, 1))];
@@ -205,7 +216,7 @@ mod tests {
             new_text: "modified".to_string(),
         }];
 
-        let state = IncrementalParseState::new(
+        let mut state = IncrementalParseState::new(
             vec![],
             &edits,
             &statement_ranges,
@@ -231,44 +242,24 @@ mod tests {
         let new_arena = Bump::new();
         let interner = StringInterner::new();
 
-        // Create cached statements
-        let x_id = interner.intern("x");
-        let y_id = interner.intern("y");
-
-        let stmt1 = Statement::Variable(old_arena.alloc(VariableDeclaration {
-            kind: VariableKind::Local,
-            pattern: Pattern::Identifier(Ident {
-                name: x_id,
-                span: Span::new(0, 11, 1, 1),
-            }),
-            type_annotation: None,
-            initializer: Expression::new(
-                ExpressionKind::Literal(Literal::Number(1.0)),
-                Span::new(10, 11, 1, 11),
-            ),
-            span: Span::new(0, 11, 1, 1),
-        }));
-
-        let stmt2 = Statement::Variable(old_arena.alloc(VariableDeclaration {
-            kind: VariableKind::Local,
-            pattern: Pattern::Identifier(Ident {
-                name: y_id,
-                span: Span::new(12, 23, 2, 1),
-            }),
-            type_annotation: None,
-            initializer: Expression::new(
-                ExpressionKind::Literal(Literal::Number(2.0)),
-                Span::new(22, 23, 2, 11),
-            ),
-            span: Span::new(12, 23, 2, 1),
-        }));
-
-        // SAFETY: Safe because old_arena is kept alive
-        let static_stmt1: &Statement<'static> = unsafe { std::mem::transmute(stmt1) };
-        let static_stmt2: &Statement<'static> = unsafe { std::mem::transmute(stmt2) };
-
-        let cached1 = CachedStatement::new(static_stmt1, "local x = 1", 0, vec![]);
-        let cached2 = CachedStatement::new(static_stmt2, "local y = 2", 0, vec![]);
+        let cached1 = make_cached_var(
+            &old_arena,
+            &interner,
+            "x",
+            1.0,
+            Span::new(0, 11, 1, 1),
+            Span::new(10, 11, 1, 11),
+            "local x = 1",
+        );
+        let cached2 = make_cached_var(
+            &old_arena,
+            &interner,
+            "y",
+            2.0,
+            Span::new(12, 23, 2, 1),
+            Span::new(22, 23, 2, 11),
+            "local y = 2",
+        );
 
         let statement_ranges = vec![
             (0, Span::new(0, 11, 1, 1)),
@@ -301,23 +292,15 @@ mod tests {
         let new_arena = Bump::new();
         let interner = StringInterner::new();
 
-        let x_id = interner.intern("x");
-        let stmt = Statement::Variable(old_arena.alloc(VariableDeclaration {
-            kind: VariableKind::Local,
-            pattern: Pattern::Identifier(Ident {
-                name: x_id,
-                span: Span::new(0, 11, 1, 1),
-            }),
-            type_annotation: None,
-            initializer: Expression::new(
-                ExpressionKind::Literal(Literal::Number(1.0)),
-                Span::new(10, 11, 1, 11),
-            ),
-            span: Span::new(0, 11, 1, 1),
-        }));
-
-        let static_stmt: &Statement<'static> = unsafe { std::mem::transmute(stmt) };
-        let cached = CachedStatement::new(static_stmt, "local x = 1", 0, vec![]);
+        let cached = make_cached_var(
+            &old_arena,
+            &interner,
+            "x",
+            1.0,
+            Span::new(0, 11, 1, 1),
+            Span::new(10, 11, 1, 11),
+            "local x = 1",
+        );
 
         let statement_ranges = vec![(0, Span::new(0, 11, 1, 1))];
         let edits = vec![TextEdit {

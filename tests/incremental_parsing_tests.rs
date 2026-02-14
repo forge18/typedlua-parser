@@ -16,11 +16,11 @@ fn test_no_edits_fast_path() {
     // First parse
     let (interner, common) = StringInterner::new_with_common_identifiers();
     let handler = Arc::new(CollectingDiagnosticHandler::new());
-    let mut lexer = Lexer::new(source, &interner);
-    let tokens = lexer.tokenize();
+    let mut lexer = Lexer::new(source, handler.clone(), &interner);
+    let tokens = lexer.tokenize().expect("Tokenize failed");
 
     let arena1 = Bump::new();
-    let mut parser1 = Parser::new(tokens.clone(), Arc::clone(&handler), &interner, &common, &arena1);
+    let mut parser1 = Parser::new(tokens.clone(), handler.clone(), &interner, &common, &arena1);
 
     let (prog1, tree1) = parser1.parse_incremental(None, &[], source).expect("First parse should succeed");
     assert_eq!(prog1.statements.len(), 2);
@@ -28,7 +28,7 @@ fn test_no_edits_fast_path() {
 
     // Second parse with no edits - should reuse everything
     let arena2 = Bump::new();
-    let mut parser2 = Parser::new(tokens, Arc::clone(&handler), &interner, &common, &arena2);
+    let mut parser2 = Parser::new(tokens, handler.clone(), &interner, &common, &arena2);
 
     // Cast tree1 to 'static for incremental parse
     let static_tree: &luanext_parser::incremental::IncrementalParseTree<'static> = unsafe {
@@ -48,22 +48,22 @@ fn test_full_parse_fallback() {
     // First parse
     let (interner, common) = StringInterner::new_with_common_identifiers();
     let handler = Arc::new(CollectingDiagnosticHandler::new());
-    let mut lexer = Lexer::new(source, &interner);
-    let tokens = lexer.tokenize();
+    let mut lexer = Lexer::new(source, handler.clone(), &interner);
+    let tokens = lexer.tokenize().expect("Tokenize failed");
 
     let arena1 = Bump::new();
-    let mut parser1 = Parser::new(tokens.clone(), Arc::clone(&handler), &interner, &common, &arena1);
+    let mut parser1 = Parser::new(tokens.clone(), handler.clone(), &interner, &common, &arena1);
 
     let (prog1, tree1) = parser1.parse_incremental(None, &[], source).expect("First parse should succeed");
     assert_eq!(prog1.statements.len(), 2);
 
     // Second parse with different source - should do full parse
     let new_source = "local a = 10\nlocal b = 20\nlocal c = 30";
-    let mut lexer2 = Lexer::new(new_source, &interner);
-    let tokens2 = lexer2.tokenize();
+    let mut lexer2 = Lexer::new(new_source, handler.clone(), &interner);
+    let tokens2 = lexer2.tokenize().expect("Tokenize failed");
 
     let arena2 = Bump::new();
-    let mut parser2 = Parser::new(tokens2, Arc::clone(&handler), &interner, &common, &arena2);
+    let mut parser2 = Parser::new(tokens2, handler.clone(), &interner, &common, &arena2);
 
     let static_tree: &luanext_parser::incremental::IncrementalParseTree<'static> = unsafe {
         std::mem::transmute(&tree1)
@@ -85,11 +85,11 @@ fn test_first_parse_path() {
 
     let (interner, common) = StringInterner::new_with_common_identifiers();
     let handler = Arc::new(CollectingDiagnosticHandler::new());
-    let mut lexer = Lexer::new(source, &interner);
-    let tokens = lexer.tokenize();
+    let mut lexer = Lexer::new(source, handler.clone(), &interner);
+    let tokens = lexer.tokenize().expect("Tokenize failed");
 
     let arena = Bump::new();
-    let mut parser = Parser::new(tokens, Arc::clone(&handler), &interner, &common, &arena);
+    let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
 
     let (prog, tree) = parser.parse_incremental(None, &[], source).expect("Parse should succeed");
     assert_eq!(prog.statements.len(), 1);
@@ -106,10 +106,10 @@ fn test_arena_consolidation_trigger() {
     let handler = Arc::new(CollectingDiagnosticHandler::new());
 
     // Parse 1: Initial parse
-    let mut lexer = Lexer::new(source1, &interner);
-    let tokens = lexer.tokenize();
+    let mut lexer = Lexer::new(source1, handler.clone(), &interner);
+    let tokens = lexer.tokenize().expect("Tokenize failed");
     let arena1 = Bump::new();
-    let mut parser1 = Parser::new(tokens, Arc::clone(&handler), &interner, &common, &arena1);
+    let mut parser1 = Parser::new(tokens, handler.clone(), &interner, &common, &arena1);
     let (_, mut tree) = parser1.parse_incremental(None, &[], source1).expect("Parse should succeed");
     assert_eq!(tree.arenas.len(), 1);
     assert_eq!(tree.version, 1);
@@ -139,10 +139,10 @@ fn test_periodic_consolidation_every_10_parses() {
     let (interner, common) = StringInterner::new_with_common_identifiers();
     let handler = Arc::new(CollectingDiagnosticHandler::new());
 
-    let mut lexer = Lexer::new(source, &interner);
-    let tokens = lexer.tokenize();
+    let mut lexer = Lexer::new(source, handler.clone(), &interner);
+    let tokens = lexer.tokenize().expect("Tokenize failed");
     let arena = Bump::new();
-    let mut parser = Parser::new(tokens, Arc::clone(&handler), &interner, &common, &arena);
+    let mut parser = Parser::new(tokens, handler.clone(), &interner, &common, &arena);
     let (_, mut tree) = parser.parse_incremental(None, &[], source).expect("Parse should succeed");
 
     // Simulate version 9 - should not consolidate
